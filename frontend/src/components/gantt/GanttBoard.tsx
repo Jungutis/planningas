@@ -510,8 +510,8 @@ export default function GanttBoard({
                     if (bLeft + bWidth < 0 || bLeft > totalWidth) return null;
                     return (
                       <div key={b.id} data-blocker="true"
-                        onMouseDown={e => e.stopPropagation()}
-                        onClick={isEditMode ? () => onBlockerEdit(b) : undefined}
+                        onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
+                        onMouseUp={isEditMode ? (e) => { e.stopPropagation(); onBlockerEdit(b); } : undefined}
                         className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}`, zIndex: isEditMode ? 20 : 10 }}>
                         <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
