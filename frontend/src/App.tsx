@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthContext, useAuthState } from './hooks/useAuth';
 import Login from './pages/Login';
 import Home from './pages/Home';
+import Planning from './pages/Planning';
 
 export default function App() {
   const auth = useAuthState();
@@ -21,11 +22,13 @@ export default function App() {
           {auth.user ? (
             <>
               <Route path="/" element={<Home />} />
+              <Route path="/planning" element={<Planning />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </>
           ) : (
             <>
               <Route path="/" element={<Login />} />
+              <Route path="/planning" element={<Planning />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </>
           )}

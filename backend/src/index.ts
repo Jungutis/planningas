@@ -1,7 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import http from 'http';
 import authRoutes from './routes/auth';
+import planningRoutes from './routes/planning';
+import { initWss } from './ws/wsServer';
 
 dotenv.config();
 
@@ -27,20 +30,21 @@ app.use(
 
 app.use(express.json({ limit: '1mb' }));
 
-// Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/planning', planningRoutes);
 
-// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// 404
 app.use((_req, res) => {
   res.status(404).json({ error: 'Maršrutas nerastas' });
 });
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+initWss(server);
+
+server.listen(PORT, () => {
   console.log(`🚀 Planningas API veikia: http://localhost:${PORT}`);
 });
 
