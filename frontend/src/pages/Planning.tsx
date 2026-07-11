@@ -186,12 +186,15 @@ export default function Planning() {
               <input
                 type="number"
                 min="1"
-                value={lc.cycleTimeSeconds}
-                onChange={e => handleCycleTimeChange(lc.id, Number(e.target.value))}
+                value={Math.round(3600 / lc.cycleTimeSeconds)}
+                onChange={e => {
+                  const pcsPerHour = Number(e.target.value);
+                  if (pcsPerHour > 0) handleCycleTimeChange(lc.id, 3600 / pcsPerHour);
+                }}
                 disabled={userRole !== 'LOG'}
                 className="w-20 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
               />
-              <span className="text-gray-500">sek/vnt.</span>
+              <span className="text-gray-500">pcs/h</span>
             </label>
           ))}
         </div>

@@ -250,11 +250,11 @@ export default function GanttBoard({
     if (!orderId) return;
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
-    // Only allow drop on the order's assigned line
     if (order.lineId && order.lineId !== lineId) return;
-    const rowRect = e.currentTarget.getBoundingClientRect();
+    // Use scrollRef container left — not the row element left — to avoid double-counting scrollLeft
+    const containerLeft = scrollRef.current?.getBoundingClientRect().left ?? 0;
     const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
-    const rawX = (e.clientX - rowRect.left) + scrollLeft - offsetX;
+    const rawX = (e.clientX - containerLeft) + scrollLeft - offsetX;
     const startTime = xToTime(Math.max(0, rawX)).toISOString();
     onUpdateOrder({ ...order, lineId, startTime });
     dragDataRef.current = null;
@@ -303,7 +303,7 @@ export default function GanttBoard({
               }}
             />
             {line.label}
-            <span className="ml-auto text-xs text-gray-500 font-normal">{lineConfig(line.id).cycleTimeSeconds}s</span>
+            <span className="ml-auto text-xs text-gray-500 font-normal">{Math.round(3600 / lineConfig(line.id).cycleTimeSeconds)} pcs/h</span>
           </div>
         ))}
       </div>
