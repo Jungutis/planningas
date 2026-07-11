@@ -355,8 +355,8 @@ export default function GanttBoard({
           } else {
             clickTimerRef.current = setTimeout(() => {
               clickTimerRef.current = null;
-              // Selection only available in edit mode
-              if (!isEditMode) { onOrderDoubleClick(order); return; }
+              // Selection only in edit mode, and never for closed orders
+              if (!isEditMode || order.closed) { onOrderDoubleClick(order); return; }
               const next = new Set(selectedIdsRef.current);
               if (next.has(order.id)) next.delete(order.id);
               else next.add(order.id);
