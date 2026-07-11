@@ -121,8 +121,8 @@ export default function GanttBoard({
   selectedIdsRef.current = selectedIds;
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
-  // Target scroll position to apply after DOM updates from a zoom
-  const zoomScrollTarget = useRef<{ timeAtMouse: number; mouseOffsetX: number; pph: number } | null>(null);
+  // Target scroll position to re-apply after React re-renders (handles browser clamping on zoom-out)
+  const zoomTarget = useRef<{ scrollLeft: number; pph: number } | null>(null);
   const zoomRafId = useRef(0);
   const pendingZoom = useRef<{ factor: number; timeAtMouse: number; mouseOffsetX: number } | null>(null);
 
@@ -142,16 +142,19 @@ export default function GanttBoard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // After pph state change, DOM has been updated — now correct scrollLeft
+  // After React re-renders with new pph, re-apply the target scrollLeft (handles browser clamping).
+  // Only acts when target.pph matches the committed pph — prevents stale targets from a later
+  // RAF overwriting zoomTarget before this render's useLayoutEffect runs.
   useLayoutEffect(() => {
-    const target = zoomScrollTarget.current;
-    if (target && scrollRef.current) {
-      zoomScrollTarget.current = null;
-      scrollRef.current.scrollLeft = target.timeAtMouse * target.pph - target.mouseOffsetX;
+    const t = zoomTarget.current;
+    if (t && t.pph === pph && scrollRef.current) {
+      zoomTarget.current = null;
+      scrollRef.current.scrollLeft = t.scrollLeft;
     }
   }, [pph]);
 
-  // Wheel zoom: batch rapid events into one RAF, set scrollLeft via useLayoutEffect
+  // Wheel zoom: set scrollLeft immediately in RAF so el.scrollLeft is always in sync with
+  // pphRef.current — next wheel event can then read it directly without any effectiveScrollLeft hack.
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const el = scrollRef.current;
@@ -161,23 +164,16 @@ export default function GanttBoard({
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
 
     if (pendingZoom.current) {
-      // Accumulate factors, keep the first anchor point
       pendingZoom.current.factor *= factor;
     } else {
-      // If a RAF already fired but useLayoutEffect hasn't updated scrollLeft yet,
-      // compute the effective scrollLeft from the pending scroll target instead of
-      // reading the stale DOM value — otherwise timeAtMouse is wildly wrong.
-      const pending = zoomScrollTarget.current;
-      const effectiveScrollLeft = pending
-        ? pending.timeAtMouse * pphRef.current - pending.mouseOffsetX
-        : el.scrollLeft;
-      const timeAtMouse = (effectiveScrollLeft + mouseOffsetX) / pphRef.current;
+      // el.scrollLeft is always in sync with pphRef.current because RAF sets both atomically
+      const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
       pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
       setDebugInfo({
         pph: pphRef.current,
         scrollLeft: el.scrollLeft,
         timeAtMouse,
-        effectiveScrollLeft,
+        effectiveScrollLeft: el.scrollLeft,
         tick: getTickIntervalHours(pphRef.current) >= 1
           ? `${getTickIntervalHours(pphRef.current)}h`
           : `${Math.round(getTickIntervalHours(pphRef.current) * 60)}min`,
@@ -190,8 +186,12 @@ export default function GanttBoard({
       if (!z) return;
       pendingZoom.current = null;
       const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
+      const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
-      zoomScrollTarget.current = { timeAtMouse: z.timeAtMouse, mouseOffsetX: z.mouseOffsetX, pph: newPph };
+      // Set scrollLeft NOW so el.scrollLeft matches pphRef.current before next wheel event fires
+      if (scrollRef.current) scrollRef.current.scrollLeft = newScrollLeft;
+      // Also store for useLayoutEffect to re-apply after React widens/shrinks the content
+      zoomTarget.current = { scrollLeft: newScrollLeft, pph: newPph };
       setPph(newPph);
     });
   }, []);
