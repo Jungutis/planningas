@@ -18,10 +18,23 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
   const [color, setColor] = useState(ORDER_COLORS[0]);
   const [lineId, setLineId] = useState<LineId>('xray');
 
+  const PN_REGEX = /^\d{3}\.\d{3}-\d{2}$/;
+  const pnValid = PN_REGEX.test(partNumber);
+  const pnTouched = partNumber.length > 0;
+
+  const handlePartNumberChange = (raw: string) => {
+    // Strip everything except digits, keep max 8 digits
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    let formatted = digits;
+    if (digits.length > 3) formatted = digits.slice(0, 3) + '.' + digits.slice(3);
+    if (digits.length > 6) formatted = digits.slice(0, 3) + '.' + digits.slice(3, 6) + '-' + digits.slice(6);
+    setPartNumber(formatted);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!partNumber.trim() || !quantity) return;
-    onCreate(partNumber.trim(), Number(quantity), color, lineId);
+    if (!pnValid || !quantity) return;
+    onCreate(partNumber, Number(quantity), color, lineId);
     onClose();
   };
 
@@ -43,9 +56,14 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">Part Number</label>
-            <input autoFocus type="text" value={partNumber} onChange={e => setPartNumber(e.target.value)}
-              placeholder="e.g. 123-456-789"
-              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+            <input autoFocus type="text" value={partNumber}
+              onChange={e => handlePartNumberChange(e.target.value)}
+              placeholder="000.000-00"
+              maxLength={10}
+              className={`w-full bg-gray-800 border rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none font-mono tracking-widest ${pnTouched && !pnValid ? 'border-red-500 focus:border-red-400' : 'border-gray-600 focus:border-blue-500'}`} />
+            {pnTouched && !pnValid && (
+              <p className="text-xs text-red-400 mt-1">Format: 000.000-00 (digits only)</p>
+            )}
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">Quantity (pcs)</label>
@@ -68,7 +86,7 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
               className="flex-1 px-4 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={!partNumber.trim() || !quantity}
+            <button type="submit" disabled={!pnValid || !quantity}
               className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               Create
             </button>
