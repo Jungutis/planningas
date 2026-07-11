@@ -24,31 +24,6 @@ function getDurationMs(order: PlanningOrder, lcs: LineConfig[]) {
   return order.quantity * (lc?.cycleTimeSeconds ?? 30) * 1000;
 }
 
-function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: LineConfig[]): PlanningOrder[] {
-  if (!moved.lineId || !moved.startTime) return [moved];
-  const movedStart = new Date(moved.startTime).getTime();
-  const movedEnd = movedStart + getDurationMs(moved, lineConfigs);
-
-  const others = allOrders
-    .filter(o => o.lineId === moved.lineId && o.startTime && o.id !== moved.id && !o.closed)
-    .sort((a, b) => new Date(a.startTime!).getTime() - new Date(b.startTime!).getTime());
-
-  const result: PlanningOrder[] = [moved];
-  let frontier = movedEnd;
-
-  for (const o of others) {
-    const dur = getDurationMs(o, lineConfigs);
-    const start = new Date(o.startTime!).getTime();
-    const end = start + dur;
-    if (start < frontier && end > movedStart) {
-      result.push({ ...o, startTime: new Date(frontier).toISOString() });
-      frontier = frontier + dur;
-    } else {
-      frontier = Math.max(frontier, end);
-    }
-  }
-  return result;
-}
 
 const ROLE_COLORS: Record<UserRole, string> = { Q: 'bg-purple-600', LOG: 'bg-blue-600', PROD: 'bg-green-600' };
 const ROLE_LABELS: Record<UserRole, string> = { Q: 'Quality', LOG: 'Logistics', PROD: 'Production' };
@@ -180,21 +155,8 @@ export default function Planning() {
   }, [editMode, selectedIds]);
 
   const handleUpdateOrder = useCallback(async (updated: PlanningOrder) => {
-    const current = ordersRef.current.find(o => o.id === updated.id);
-    const positionChanged = current?.startTime !== updated.startTime && !updated.closed;
-
-    if (positionChanged && updated.lineId && updated.startTime) {
-      const cascaded = cascade(ordersRef.current, updated, lineConfigsRef.current);
-      setOrders(prev => {
-        const map = new Map(prev.map(o => [o.id, o]));
-        cascaded.forEach(o => map.set(o.id, o));
-        return Array.from(map.values());
-      });
-      await Promise.all(cascaded.map(o => apiPatch(`/orders/${o.id}`, { startTime: o.startTime, lineId: o.lineId })));
-    } else {
-      setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
-      void apiPatch(`/orders/${updated.id}`, updated);
-    }
+    setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+    void apiPatch(`/orders/${updated.id}`, updated);
   }, []);
 
   const handleDeleteOrder = useCallback((id: string) => {
