@@ -102,6 +102,7 @@ export default function GanttBoard({
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
   const [lasso, setLasso] = useState<LassoRect | null>(null);
+  const [debugInfo, setDebugInfo] = useState<{ pph: number; scrollLeft: number; timeAtMouse: number; effectiveScrollLeft: number; tick: string } | null>(null);
   const [slidingId, setSlidingId] = useState<string | null>(null);
   const [slidingLeft, setSlidingLeft] = useState(0);
 
@@ -172,6 +173,15 @@ export default function GanttBoard({
         : el.scrollLeft;
       const timeAtMouse = (effectiveScrollLeft + mouseOffsetX) / pphRef.current;
       pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
+      setDebugInfo({
+        pph: pphRef.current,
+        scrollLeft: el.scrollLeft,
+        timeAtMouse,
+        effectiveScrollLeft,
+        tick: getTickIntervalHours(pphRef.current) >= 1
+          ? `${getTickIntervalHours(pphRef.current)}h`
+          : `${Math.round(getTickIntervalHours(pphRef.current) * 60)}min`,
+      });
     }
 
     cancelAnimationFrame(zoomRafId.current);
@@ -528,6 +538,17 @@ export default function GanttBoard({
       {lasso && (
         <div className="fixed pointer-events-none z-50 border border-blue-400 bg-blue-400/10"
           style={{ left: lasso.x1, top: lasso.y1, width: lasso.x2 - lasso.x1, height: lasso.y2 - lasso.y1 }} />
+      )}
+
+      {/* Debug zoom overlay */}
+      {debugInfo && (
+        <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-50 bg-black/80 border border-yellow-500/60 rounded-lg px-3 py-2 text-xs font-mono text-yellow-300 flex gap-4 pointer-events-none select-none">
+          <span>pph: <b>{debugInfo.pph.toFixed(2)}</b></span>
+          <span>tick: <b>{debugInfo.tick}</b></span>
+          <span>scrollLeft: <b>{debugInfo.scrollLeft.toFixed(0)}</b></span>
+          <span>effectiveSL: <b>{debugInfo.effectiveScrollLeft.toFixed(0)}</b></span>
+          <span>timeAtMouse: <b>{debugInfo.timeAtMouse.toFixed(2)}h</b></span>
+        </div>
       )}
     </div>
   );
