@@ -566,7 +566,6 @@ export default function GanttBoard({
                           outlineOffset: isSelected ? '-2px' : undefined,
                           boxShadow: isSliding ? `0 8px 24px ${order.color}66` : undefined,
                           zIndex: isSliding ? 30 : (order.closed ? 1 : 10),
-                          transition: isSliding ? 'none' : 'left 0.12s ease-out, width 0.12s ease-out',
                         }}>
                         {si > 0 && (
                           <span className="absolute left-0 top-0 bottom-0 w-1 opacity-60" style={{ background: 'repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,0.3) 3px,rgba(0,0,0,0.3) 6px)' }} />
