@@ -24,7 +24,7 @@ export default function OrderModal({ order, userRole, lineConfig, isEditMode, on
   const [commentText, setCommentText] = useState('');
 
   const canEditColor = isEditMode && userRole === 'LOG';
-  const canEditScrap = (userRole === 'LOG' && isEditMode) || (userRole === 'Q');
+  const canEditScrap = order.lineId === 'qlab' && ((userRole === 'LOG' && isEditMode) || userRole === 'Q');
   const canComment = true;
   const canClose = userRole === 'LOG' || (userRole === 'PROD' && order.lineId === 'qlab');
   const canDelete = isEditMode && userRole === 'LOG';
