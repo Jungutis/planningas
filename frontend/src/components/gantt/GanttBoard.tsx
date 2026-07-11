@@ -119,93 +119,90 @@ export default function GanttBoard({
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
-  // Header mouse pan
+  // Pan gesture — attaches window listeners so mouseup is always caught
+  const startPan = useCallback((clientX: number) => {
+    isPanningRef.current = true;
+    panStartRef.current = { x: clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!scrollRef.current) return;
+      scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - (ev.clientX - panStartRef.current.x);
+    };
+    const onUp = () => {
+      isPanningRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  // Lasso gesture — attaches window listeners so mouseup is always caught
+  const startLasso = useCallback((clientX: number, clientY: number) => {
+    const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
+    lassoStartRef.current = { clientX, clientY, scrollLeft };
+    setLasso(null);
+    onSelectionChange(new Set());
+
+    const onMove = (ev: MouseEvent) => {
+      const start = lassoStartRef.current;
+      if (!start) return;
+      if (Math.abs(ev.clientX - start.clientX) < 4 && Math.abs(ev.clientY - start.clientY) < 4) return;
+      setLasso({
+        x1: Math.min(ev.clientX, start.clientX),
+        y1: Math.min(ev.clientY, start.clientY),
+        x2: Math.max(ev.clientX, start.clientX),
+        y2: Math.max(ev.clientY, start.clientY),
+      });
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      const start = lassoStartRef.current;
+      lassoStartRef.current = null;
+      setLasso(null);
+      if (!start || !rowsRef.current || !scrollRef.current) return;
+      const rowsRect = rowsRef.current.getBoundingClientRect();
+      const sl = scrollRef.current.scrollLeft;
+      const lx1 = Math.min(ev.clientX, start.clientX) - rowsRect.left + sl;
+      const lx2 = Math.max(ev.clientX, start.clientX) - rowsRect.left + sl;
+      const ly1 = Math.min(ev.clientY, start.clientY) - rowsRect.top;
+      const ly2 = Math.max(ev.clientY, start.clientY) - rowsRect.top;
+      if (lx2 - lx1 < 4 && ly2 - ly1 < 4) return;
+      const newSelected = new Set<string>();
+      orders.forEach(order => {
+        if (!order.startTime || !order.lineId || order.closed) return;
+        const lineIndex = LINES.findIndex(l => l.id === order.lineId);
+        if (lineIndex < 0) return;
+        const lc = lineConfigs.find(l => l.id === order.lineId) ?? lineConfigs[0];
+        const ox1 = ((new Date(order.startTime).getTime() - timelineStart.getTime()) / 3600000) * pphRef.current;
+        const ox2 = ox1 + getDurationHours(order, lc) * pphRef.current;
+        const oy1 = lineIndex * ROW_H;
+        const oy2 = (lineIndex + 1) * ROW_H;
+        if (lx1 < ox2 && lx2 > ox1 && ly1 < oy2 && ly2 > oy1) newSelected.add(order.id);
+      });
+      onSelectionChange(newSelected);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [orders, lineConfigs, timelineStart, onSelectionChange]);
+
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    isPanningRef.current = true;
-    panStartRef.current = { x: e.clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
     e.preventDefault();
-  }, []);
+    startPan(e.clientX);
+  }, [startPan]);
 
-  const onHeaderMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isPanningRef.current || !scrollRef.current) return;
-    scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.x);
-  }, []);
-
-  const onHeaderMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
-
-  // Rows mousedown — pan or lasso depending on mode
   const onRowsMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('[data-order-block]')) return;
-
-    if (mode === 'pan') {
-      isPanningRef.current = true;
-      panStartRef.current = { x: e.clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
-    } else {
-      lassoStartRef.current = {
-        clientX: e.clientX,
-        clientY: e.clientY,
-        scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-      };
-      setLasso(null);
-      onSelectionChange(new Set());
-    }
     e.preventDefault();
-  }, [mode, onSelectionChange]);
-
-  const onRowsMouseMove = useCallback((e: React.MouseEvent) => {
-    if (mode === 'pan' && isPanningRef.current && scrollRef.current) {
-      scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.x);
-      return;
-    }
-    const start = lassoStartRef.current;
-    if (!start) return;
-    const dx = Math.abs(e.clientX - start.clientX);
-    const dy = Math.abs(e.clientY - start.clientY);
-    if (dx < 4 && dy < 4) return;
-    setLasso({
-      x1: Math.min(e.clientX, start.clientX),
-      y1: Math.min(e.clientY, start.clientY),
-      x2: Math.max(e.clientX, start.clientX),
-      y2: Math.max(e.clientY, start.clientY),
-    });
-  }, []);
-
-  const onRowsMouseUp = useCallback((e: React.MouseEvent) => {
-    if (mode === 'pan') { isPanningRef.current = false; return; }
-    const start = lassoStartRef.current;
-    lassoStartRef.current = null;
-    if (!start || !lasso || !rowsRef.current || !scrollRef.current) {
-      setLasso(null);
-      return;
-    }
-    // Convert lasso viewport coords → timeline space
-    const rowsRect = rowsRef.current.getBoundingClientRect();
-    const sl = scrollRef.current.scrollLeft;
-    const lx1 = Math.min(e.clientX, start.clientX) - rowsRect.left + sl;
-    const lx2 = Math.max(e.clientX, start.clientX) - rowsRect.left + sl;
-    const ly1 = Math.min(e.clientY, start.clientY) - rowsRect.top;
-    const ly2 = Math.max(e.clientY, start.clientY) - rowsRect.top;
-
-    const newSelected = new Set<string>();
-    orders.forEach(order => {
-      if (!order.startTime || !order.lineId || order.closed) return;
-      const lineIndex = LINES.findIndex(l => l.id === order.lineId);
-      if (lineIndex < 0) return;
-      const lc = lineConfigs.find(l => l.id === order.lineId) ?? lineConfigs[0];
-      const ox1 = ((new Date(order.startTime).getTime() - timelineStart.getTime()) / 3600000) * pphRef.current;
-      const ox2 = ox1 + getDurationHours(order, lc) * pphRef.current;
-      const oy1 = lineIndex * ROW_H;
-      const oy2 = (lineIndex + 1) * ROW_H;
-      if (lx1 < ox2 && lx2 > ox1 && ly1 < oy2 && ly2 > oy1) {
-        newSelected.add(order.id);
-      }
-    });
-    onSelectionChange(newSelected);
-    setLasso(null);
-  }, [lasso, orders, lineConfigs, timelineStart, onSelectionChange]);
+    if (mode === 'pan') startPan(e.clientX);
+    else startLasso(e.clientX, e.clientY);
+  }, [mode, startPan, startLasso]);
 
   const xToTime = useCallback((rawX: number): Date => {
     const ms = (rawX / pph) * 3600000;
@@ -321,9 +318,6 @@ export default function GanttBoard({
             className="bg-gray-950 border-b border-gray-700 relative overflow-hidden select-none"
             style={{ height: HEADER_H, cursor: 'grab' }}
             onMouseDown={onHeaderMouseDown}
-            onMouseMove={onHeaderMouseMove}
-            onMouseUp={onHeaderMouseUp}
-            onMouseLeave={onHeaderMouseUp}
           >
             {ticks.map((tick, i) => (
               <div
@@ -348,9 +342,6 @@ export default function GanttBoard({
             className="relative select-none"
             style={{ cursor: mode === 'pan' ? 'grab' : 'crosshair' }}
             onMouseDown={onRowsMouseDown}
-            onMouseMove={onRowsMouseMove}
-            onMouseUp={onRowsMouseUp}
-            onMouseLeave={e => { if (lassoStartRef.current) onRowsMouseUp(e); }}
           >
             {LINES.map((line, lineIndex) => {
               const lineOrders = orders.filter(o => o.lineId === line.id && o.startTime);
