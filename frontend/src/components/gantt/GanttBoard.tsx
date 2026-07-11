@@ -163,7 +163,14 @@ export default function GanttBoard({
       // Accumulate factors, keep the first anchor point
       pendingZoom.current.factor *= factor;
     } else {
-      const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
+      // If a RAF already fired but useLayoutEffect hasn't updated scrollLeft yet,
+      // compute the effective scrollLeft from the pending scroll target instead of
+      // reading the stale DOM value — otherwise timeAtMouse is wildly wrong.
+      const pending = zoomScrollTarget.current;
+      const effectiveScrollLeft = pending
+        ? pending.timeAtMouse * pphRef.current - pending.mouseOffsetX
+        : el.scrollLeft;
+      const timeAtMouse = (effectiveScrollLeft + mouseOffsetX) / pphRef.current;
       pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
     }
 
