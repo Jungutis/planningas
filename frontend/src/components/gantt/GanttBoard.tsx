@@ -203,6 +203,26 @@ export default function GanttBoard({
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
+  // Native click listener for blockers — bypasses synthetic event issues
+  const isEditModeRef = useRef(isEditMode);
+  isEditModeRef.current = isEditMode;
+  const onBlockerEditRef = useRef(onBlockerEdit);
+  onBlockerEditRef.current = onBlockerEdit;
+  useEffect(() => {
+    const el = rowsRef.current;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const blockerEl = target.closest('[data-blocker-id]');
+      if (!blockerEl || !isEditModeRef.current) return;
+      const id = blockerEl.getAttribute('data-blocker-id');
+      const blocker = blockersRef.current.find(b => b.id === id);
+      if (blocker) onBlockerEditRef.current(blocker);
+    };
+    el.addEventListener('click', handler);
+    return () => el.removeEventListener('click', handler);
+  }, []);
+
   // Pan with momentum
   const startPan = useCallback((clientX: number) => {
     panStartRef.current = { x: clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
@@ -509,9 +529,8 @@ export default function GanttBoard({
                     const bWidth = ((new Date(b.endTime).getTime() - new Date(b.startTime).getTime()) / 3600000) * pph;
                     if (bLeft + bWidth < 0 || bLeft > totalWidth) return null;
                     return (
-                      <div key={b.id} data-blocker="true"
-                        onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
-                        onMouseUp={isEditMode ? (e) => { e.stopPropagation(); onBlockerEdit(b); } : undefined}
+                      <div key={b.id} data-blocker="true" data-blocker-id={b.id}
+                        onMouseDown={e => e.stopPropagation()}
                         className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}`, zIndex: isEditMode ? 20 : 10 }}>
                         <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
