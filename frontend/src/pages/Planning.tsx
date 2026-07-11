@@ -256,12 +256,21 @@ export default function Planning() {
                         e.dataTransfer.setData('dragOffsetX', '20');
                       }}
                       onDoubleClick={() => setModalOrder(order)}
-                      className="bg-gray-800 border rounded-lg p-2 mb-1 cursor-pointer hover:bg-gray-750 transition-colors"
+                      className="group bg-gray-800 border rounded-lg p-2 mb-1 cursor-pointer hover:bg-gray-750 transition-colors"
                       style={{ borderColor: order.color + '80' }}
                     >
                       <div className="flex items-center gap-2 mb-0.5">
                         <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: order.color }} />
-                        <span className="text-xs font-semibold text-white truncate">{order.partNumber}</span>
+                        <span className="text-xs font-semibold text-white truncate flex-1">{order.partNumber}</span>
+                        {userRole === 'LOG' && (
+                          <button
+                            onClick={e => { e.stopPropagation(); handleDeleteOrder(order.id); }}
+                            className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all text-xs leading-none px-0.5"
+                            title="Ištrinti orderį"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                       <span className="text-xs text-gray-400 pl-4">{order.quantity} vnt.</span>
                     </div>
