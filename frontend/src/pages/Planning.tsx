@@ -4,7 +4,7 @@ import { useWs } from '../hooks/useWs';
 import GanttBoard, { BoardMode } from '../components/gantt/GanttBoard';
 import OrderModal from '../components/gantt/OrderModal';
 import CreateOrderModal from '../components/gantt/CreateOrderModal';
-import CreateBlockerModal from '../components/gantt/CreateBlockerModal';
+import BlockerModal from '../components/gantt/BlockerModal';
 
 const API = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
 
@@ -24,7 +24,6 @@ function getDurationMs(order: PlanningOrder, lcs: LineConfig[]) {
   return order.quantity * (lc?.cycleTimeSeconds ?? 30) * 1000;
 }
 
-// Push overlapping active orders on the same line to avoid overlap
 function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: LineConfig[]): PlanningOrder[] {
   if (!moved.lineId || !moved.startTime) return [moved];
   const movedStart = new Date(moved.startTime).getTime();
@@ -41,7 +40,6 @@ function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: 
     const dur = getDurationMs(o, lineConfigs);
     const start = new Date(o.startTime!).getTime();
     const end = start + dur;
-    // Only push if this order actually overlaps with [movedStart, frontier]
     if (start < frontier && end > movedStart) {
       result.push({ ...o, startTime: new Date(frontier).toISOString() });
       frontier = frontier + dur;
@@ -54,6 +52,7 @@ function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: 
 
 const ROLE_COLORS: Record<UserRole, string> = { Q: 'bg-purple-600', LOG: 'bg-blue-600', PROD: 'bg-green-600' };
 const ROLE_LABELS: Record<UserRole, string> = { Q: 'Quality', LOG: 'Logistics', PROD: 'Production' };
+const DEFAULT_BLOCKER_COLOR = '#ef4444';
 
 export default function Planning() {
   const [orders, setOrders] = useState<PlanningOrder[]>([]);
@@ -69,9 +68,13 @@ export default function Planning() {
   const [modalOrder, setModalOrder] = useState<PlanningOrder | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
-  const [showCreateBlocker, setShowCreateBlocker] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Blocker create from draw
+  const [pendingBlockerDraw, setPendingBlockerDraw] = useState<{ lineId: LineId; startTime: string; endTime: string } | null>(null);
+  // Blocker edit
+  const [editingBlocker, setEditingBlocker] = useState<Blocker | null>(null);
+
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
   const lineConfigsRef = useRef(lineConfigs);
@@ -101,11 +104,9 @@ export default function Planning() {
     setSelectedIds(new Set());
     if (!snap) return;
 
-    // Restore local state immediately
     setOrders(snap.orders);
     setLineConfigs(snap.lineConfigs);
 
-    // Revert changed orders in DB
     const current = ordersRef.current;
     await Promise.all(
       snap.orders
@@ -115,7 +116,6 @@ export default function Planning() {
         })
         .map(so => apiPatch(`/orders/${so.id}`, { startTime: so.startTime, lineId: so.lineId }))
     );
-    // Revert changed line configs
     await Promise.all(
       snap.lineConfigs
         .filter(sl => {
@@ -126,7 +126,6 @@ export default function Planning() {
     );
   }, []);
 
-  // When role changes away from LOG, exit edit mode
   useEffect(() => {
     if (userRole !== 'LOG') { editSnapshot.current = null; setEditMode(false); }
   }, [userRole]);
@@ -155,13 +154,13 @@ export default function Planning() {
     }
   }, []));
 
-  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'h' || e.key === 'H') setBoardMode('pan');
       if ((e.key === 's' || e.key === 'S') && editMode) setBoardMode('select');
+      if ((e.key === 'b' || e.key === 'B') && editMode) setBoardMode('blocker');
       if ((e.key === 'Delete' || e.key === 'Backspace') && editMode) {
         const ids = selectedIds;
         if (ids.size === 0) return;
@@ -213,9 +212,30 @@ export default function Planning() {
     await apiPost('/orders', { partNumber, quantity, color, lineId });
   }, []);
 
-  const handleCreateBlocker = useCallback(async (lineId: LineId | null, startTime: string, endTime: string, label: string, color: string) => {
-    await apiPost('/blockers', { lineId, startTime, endTime, label, color });
+  // Called from board after drawing — opens modal with pre-filled times
+  const handleBlockerDraw = useCallback((lineId: LineId, startTime: string, endTime: string) => {
+    setPendingBlockerDraw({ lineId, startTime, endTime });
+    setBoardMode('pan'); // switch back to pan after drawing
   }, []);
+
+  // Save new blocker (from draw modal)
+  const handleBlockerCreate = useCallback(async (v: { lineId: LineId | null; startTime: string; endTime: string; label: string; color: string }) => {
+    await apiPost('/blockers', v);
+    setPendingBlockerDraw(null);
+  }, []);
+
+  // Open edit modal for existing blocker
+  const handleBlockerEdit = useCallback((blocker: Blocker) => {
+    setEditingBlocker(blocker);
+  }, []);
+
+  // Save edited blocker (delete old + create new with same data)
+  const handleBlockerUpdate = useCallback(async (v: { lineId: LineId | null; startTime: string; endTime: string; label: string; color: string }) => {
+    if (!editingBlocker) return;
+    await apiDelete(`/blockers/${editingBlocker.id}`);
+    await apiPost('/blockers', v);
+    setEditingBlocker(null);
+  }, [editingBlocker]);
 
   const handleDeleteBlocker = useCallback((id: string) => {
     setBlockers(prev => prev.filter(b => b.id !== id));
@@ -249,13 +269,11 @@ export default function Planning() {
     <div className="h-screen flex flex-col bg-gray-950 text-white select-none overflow-hidden">
       {/* Top bar */}
       <header className="flex items-center gap-2 px-3 md:px-4 py-2 bg-gray-900 border-b border-gray-700 shrink-0 flex-wrap">
-        {/* Sidebar toggle (mobile) */}
         <button onClick={() => setSidebarOpen(s => !s)}
           className="md:hidden text-gray-400 hover:text-white px-1 text-lg">☰</button>
 
         <span className="font-bold text-base md:text-lg tracking-tight text-white mr-2">Production Planning</span>
 
-        {/* Role selector */}
         <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
           {(['Q', 'LOG', 'PROD'] as UserRole[]).map(role => (
             <button key={role} onClick={() => setUserRole(role)}
@@ -265,7 +283,6 @@ export default function Planning() {
           ))}
         </div>
 
-        {/* Edit mode toggle — LOG only */}
         {userRole === 'LOG' && !isEditMode && (
           <button onClick={handleToggleEdit}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors border bg-gray-800 border-gray-600 text-gray-400 hover:text-white">
@@ -287,8 +304,6 @@ export default function Planning() {
         )}
 
         <div className="flex-1" />
-
-        {/* Settings */}
         <button onClick={() => setShowSettings(s => !s)} className="text-gray-400 hover:text-white text-xl px-1" title="Settings">⚙</button>
       </header>
 
@@ -326,16 +341,10 @@ export default function Planning() {
           onDrop={handleSidebarDrop}>
           <div className="p-2 border-b border-gray-700 space-y-1">
             {isEditMode && (
-              <>
-                <button onClick={() => setShowCreate(true)}
-                  className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors">
-                  + New Order
-                </button>
-                <button onClick={() => setShowCreateBlocker(true)}
-                  className="w-full py-1.5 bg-gray-700 hover:bg-gray-600 text-red-400 text-xs font-semibold rounded-lg transition-colors">
-                  + Add Blocker
-                </button>
-              </>
+              <button onClick={() => setShowCreate(true)}
+                className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors">
+                + New Order
+              </button>
             )}
             {!isEditMode && userRole !== 'LOG' && (
               <div className="text-xs text-gray-600 text-center py-1">Log in as Logistics to edit</div>
@@ -414,15 +423,29 @@ export default function Planning() {
               <span>✋</span><span className="hidden sm:inline">Pan</span><span className="text-xs text-gray-600 ml-0.5">H</span>
             </button>
             {isEditMode && (
-              <button onClick={() => setBoardMode('select')} title="Select (S)"
-                className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'select' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
-                <span>⬚</span><span className="hidden sm:inline">Select</span><span className="text-xs text-gray-600 ml-0.5">S</span>
-              </button>
+              <>
+                <button onClick={() => setBoardMode('select')} title="Select (S)"
+                  className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'select' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+                  <span>⬚</span><span className="hidden sm:inline">Select</span><span className="text-xs text-gray-600 ml-0.5">S</span>
+                </button>
+                <button onClick={() => setBoardMode(boardMode === 'blocker' ? 'pan' : 'blocker')} title="Draw Blocker (B)"
+                  className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'blocker' ? 'bg-red-900 text-red-300 border border-red-700' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+                  <span>⛔</span><span className="hidden sm:inline">Blocker</span><span className="text-xs text-gray-600 ml-0.5">B</span>
+                </button>
+              </>
             )}
             {!sidebarOpen && (
               <button onClick={() => setSidebarOpen(true)} className="ml-auto text-xs text-gray-500 hover:text-gray-300 md:hidden">Show sidebar</button>
             )}
           </div>
+
+          {/* Blocker mode hint */}
+          {boardMode === 'blocker' && isEditMode && (
+            <div className="bg-red-950/60 border-b border-red-900 px-4 py-1 flex items-center gap-2 shrink-0">
+              <span className="text-xs text-red-400">Drag on a row to draw a blocker. Click an existing blocker to edit it.</span>
+              <button onClick={() => setBoardMode('pan')} className="ml-auto text-xs text-red-600 hover:text-red-400">✕ Exit</button>
+            </div>
+          )}
 
           <div className="flex-1 overflow-hidden">
             <GanttBoard
@@ -435,6 +458,8 @@ export default function Planning() {
               onUpdateOrder={handleUpdateOrder}
               onOrderDoubleClick={setModalOrder}
               onSelectionChange={setSelectedIds}
+              onBlockerDraw={handleBlockerDraw}
+              onBlockerEdit={handleBlockerEdit}
               onDeleteBlocker={handleDeleteBlocker}
             />
           </div>
@@ -442,7 +467,40 @@ export default function Planning() {
       </div>
 
       {showCreate && <CreateOrderModal onClose={() => setShowCreate(false)} onCreate={handleCreateOrder} />}
-      {showCreateBlocker && <CreateBlockerModal onClose={() => setShowCreateBlocker(false)} onCreate={handleCreateBlocker} />}
+
+      {/* Blocker create modal (after drawing) */}
+      {pendingBlockerDraw && (
+        <BlockerModal
+          mode="create"
+          initial={{
+            lineId: pendingBlockerDraw.lineId,
+            startTime: pendingBlockerDraw.startTime,
+            endTime: pendingBlockerDraw.endTime,
+            label: '',
+            color: DEFAULT_BLOCKER_COLOR,
+          }}
+          onSave={handleBlockerCreate}
+          onClose={() => setPendingBlockerDraw(null)}
+        />
+      )}
+
+      {/* Blocker edit modal */}
+      {editingBlocker && (
+        <BlockerModal
+          mode="edit"
+          initial={{
+            lineId: editingBlocker.lineId ?? null,
+            startTime: editingBlocker.startTime,
+            endTime: editingBlocker.endTime,
+            label: editingBlocker.label,
+            color: editingBlocker.color,
+          }}
+          onSave={handleBlockerUpdate}
+          onDelete={() => { handleDeleteBlocker(editingBlocker.id); setEditingBlocker(null); }}
+          onClose={() => setEditingBlocker(null)}
+        />
+      )}
+
       {modalOrder && (
         <OrderModal
           key={modalOrder.id}

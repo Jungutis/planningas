@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { PlanningOrder, LineConfig, LineId, Blocker } from '../../types';
 
-export type BoardMode = 'pan' | 'select';
+export type BoardMode = 'pan' | 'select' | 'blocker';
 
 interface Props {
   orders: PlanningOrder[];
@@ -13,6 +13,8 @@ interface Props {
   onUpdateOrder: (order: PlanningOrder) => void;
   onOrderDoubleClick: (order: PlanningOrder) => void;
   onSelectionChange: (ids: Set<string>) => void;
+  onBlockerDraw: (lineId: LineId, startTime: string, endTime: string) => void;
+  onBlockerEdit: (blocker: Blocker) => void;
   onDeleteBlocker: (id: string) => void;
 }
 
@@ -93,15 +95,54 @@ function getSegments(
   }));
 }
 
+// Snap a desired pixel position so the order doesn't overlap any blocker
+function snapToBlockers(
+  desiredPx: number,
+  orderWidthPx: number,
+  lineId: LineId | null,
+  blockers: Blocker[],
+  timelineStartMs: number,
+  pph: number,
+): number {
+  const rel = blockers
+    .filter(b => b.lineId === null || b.lineId === lineId)
+    .map(b => ({
+      l: ((new Date(b.startTime).getTime() - timelineStartMs) / 3600000) * pph,
+      r: ((new Date(b.endTime).getTime() - timelineStartMs) / 3600000) * pph,
+    }))
+    .sort((a, b) => a.l - b.l);
+
+  let pos = desiredPx;
+  // Iteratively resolve overlaps (handles adjacent blockers)
+  for (let iter = 0; iter < rel.length; iter++) {
+    let changed = false;
+    for (const b of rel) {
+      if (pos < b.r && pos + orderWidthPx > b.l) {
+        // Snap to whichever blocker edge is closer to desired position
+        const snapBefore = b.l - orderWidthPx;
+        const snapAfter = b.r;
+        pos = Math.abs(desiredPx - snapBefore) <= Math.abs(desiredPx - snapAfter) ? snapBefore : snapAfter;
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+  return Math.max(0, pos);
+}
+
 interface LassoRect { x1: number; y1: number; x2: number; y2: number }
+interface DrawingBlocker { lineId: LineId; lineIndex: number; startPx: number; currentPx: number }
 
 export default function GanttBoard({
   orders, lineConfigs, blockers, selectedIds, mode, isEditMode,
-  onUpdateOrder, onOrderDoubleClick, onSelectionChange, onDeleteBlocker,
+  onUpdateOrder, onOrderDoubleClick, onSelectionChange,
+  onBlockerDraw, onBlockerEdit, onDeleteBlocker,
 }: Props) {
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
   const [lasso, setLasso] = useState<LassoRect | null>(null);
+  const [drawingBlocker, setDrawingBlocker] = useState<DrawingBlocker | null>(null);
   const [debugInfo, setDebugInfo] = useState<{ pph: number; scrollLeft: number; timeAtMouse: number; effectiveScrollLeft: number; tick: string } | null>(null);
   const [slidingId, setSlidingId] = useState<string | null>(null);
   const [slidingLeft, setSlidingLeft] = useState(0);
@@ -121,7 +162,8 @@ export default function GanttBoard({
   selectedIdsRef.current = selectedIds;
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
-  // Target scroll position to re-apply after React re-renders (handles browser clamping on zoom-out)
+  const blockersRef = useRef(blockers);
+  blockersRef.current = blockers;
   const zoomTarget = useRef<{ scrollLeft: number; pph: number } | null>(null);
   const zoomRafId = useRef(0);
   const pendingZoom = useRef<{ factor: number; timeAtMouse: number; mouseOffsetX: number } | null>(null);
@@ -142,9 +184,6 @@ export default function GanttBoard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // After React re-renders with new pph, re-apply the target scrollLeft (handles browser clamping).
-  // Only acts when target.pph matches the committed pph — prevents stale targets from a later
-  // RAF overwriting zoomTarget before this render's useLayoutEffect runs.
   useLayoutEffect(() => {
     const t = zoomTarget.current;
     if (t && t.pph === pph && scrollRef.current) {
@@ -153,8 +192,6 @@ export default function GanttBoard({
     }
   }, [pph]);
 
-  // Wheel zoom: set scrollLeft immediately in RAF so el.scrollLeft is always in sync with
-  // pphRef.current — next wheel event can then read it directly without any effectiveScrollLeft hack.
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const el = scrollRef.current;
@@ -166,7 +203,6 @@ export default function GanttBoard({
     if (pendingZoom.current) {
       pendingZoom.current.factor *= factor;
     } else {
-      // el.scrollLeft is always in sync with pphRef.current because RAF sets both atomically
       const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
       pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
       setDebugInfo({
@@ -188,9 +224,7 @@ export default function GanttBoard({
       const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
       const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
-      // Set scrollLeft NOW so el.scrollLeft matches pphRef.current before next wheel event fires
       if (scrollRef.current) scrollRef.current.scrollLeft = newScrollLeft;
-      // Also store for useLayoutEffect to re-apply after React widens/shrinks the content
       zoomTarget.current = { scrollLeft: newScrollLeft, pph: newPph };
       setPph(newPph);
     });
@@ -224,7 +258,6 @@ export default function GanttBoard({
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      // Momentum
       let v = vel * 12;
       const decay = () => {
         if (Math.abs(v) < 0.3) return;
@@ -242,7 +275,7 @@ export default function GanttBoard({
 
   // Lasso
   const startLasso = useCallback((clientX: number, clientY: number) => {
-    if (!isEditMode) return; // selection only in edit mode
+    if (!isEditMode) return;
     lassoStartRef.current = { clientX, clientY, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
     setLasso(null);
     onSelectionChange(new Set());
@@ -274,7 +307,7 @@ export default function GanttBoard({
         const li = LINES.findIndex(l => l.id === order.lineId);
         if (li < 0) return;
         const lc = lineConfigs.find(l => l.id === order.lineId) ?? lineConfigs[0];
-        const segs = getSegments(order, blockers, lc, timelineStartMs, pphRef.current);
+        const segs = getSegments(order, blockersRef.current, lc, timelineStartMs, pphRef.current);
         const oy1 = li * ROW_H, oy2 = (li + 1) * ROW_H;
         if (ly1 >= oy2 || ly2 <= oy1) return;
         for (const s of segs) {
@@ -286,7 +319,46 @@ export default function GanttBoard({
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [lineConfigs, blockers, timelineStartMs, onSelectionChange]);
+  }, [lineConfigs, timelineStartMs, onSelectionChange]);
+
+  // Blocker draw mode
+  const startBlockerDraw = useCallback((clientX: number, clientY: number) => {
+    if (!isEditMode) return;
+    const rowsEl = rowsRef.current;
+    const scrollEl = scrollRef.current;
+    if (!rowsEl || !scrollEl) return;
+
+    const rr = rowsEl.getBoundingClientRect();
+    const relY = clientY - rr.top;
+    const lineIndex = Math.floor(relY / ROW_H);
+    if (lineIndex < 0 || lineIndex >= LINES.length) return;
+
+    const startPx = clientX - scrollEl.getBoundingClientRect().left + scrollEl.scrollLeft;
+    const lineId = LINES[lineIndex].id;
+
+    setDrawingBlocker({ lineId, lineIndex, startPx, currentPx: startPx });
+
+    const onMove = (ev: MouseEvent) => {
+      const currentPx = ev.clientX - scrollEl.getBoundingClientRect().left + scrollEl.scrollLeft;
+      setDrawingBlocker(prev => prev ? { ...prev, currentPx } : null);
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setDrawingBlocker(null);
+      const endPx = ev.clientX - scrollEl.getBoundingClientRect().left + scrollEl.scrollLeft;
+      const minPx = Math.min(startPx, endPx);
+      const maxPx = Math.max(startPx, endPx);
+      if (maxPx - minPx < 8) return;
+      const startMs = (minPx / pphRef.current) * 3600000 + timelineStartMs;
+      const endMs = (maxPx / pphRef.current) * 3600000 + timelineStartMs;
+      onBlockerDraw(lineId, new Date(startMs).toISOString(), new Date(endMs).toISOString());
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [isEditMode, timelineStartMs, onBlockerDraw]);
 
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -299,14 +371,17 @@ export default function GanttBoard({
     const target = e.target as HTMLElement;
     if (target.closest('[data-order-block]') || target.closest('[data-blocker]')) return;
     e.preventDefault();
-    // Deselect all if orders are selected
+    if (mode === 'blocker') {
+      startBlockerDraw(e.clientX, e.clientY);
+      return;
+    }
     if (selectedIdsRef.current.size > 0) {
       onSelectionChange(new Set());
       return;
     }
     if (mode === 'pan') startPan(e.clientX);
     else startLasso(e.clientX, e.clientY);
-  }, [mode, startPan, startLasso, onSelectionChange]);
+  }, [mode, startPan, startLasso, startBlockerDraw, onSelectionChange]);
 
   const xToTime = useCallback((rawX: number): Date => {
     const ms = (rawX / pph) * 3600000;
@@ -319,8 +394,8 @@ export default function GanttBoard({
     return ((new Date(order.startTime).getTime() - timelineStartMs) / 3600000) * pph;
   }, [pph, timelineStartMs]);
 
-  // Slide handler for orders on board
-  const makeSlideHandler = (order: PlanningOrder, baseLeft: number) =>
+  // Slide handler — snaps order position so it can't pass through blockers
+  const makeSlideHandler = (order: PlanningOrder, baseLeft: number, lc: LineConfig) =>
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
       e.stopPropagation();
@@ -329,23 +404,27 @@ export default function GanttBoard({
       const canSlide = isEditMode && !order.closed;
       const startX = e.clientX;
       let moved = false;
+      const orderWidthPx = (getDurationMs(order, lc) / 3600000) * pphRef.current;
 
       const onMove = (ev: MouseEvent) => {
         if (!canSlide) return;
         const delta = ev.clientX - startX;
         if (!moved && Math.abs(delta) < 5) return;
         moved = true;
+        const raw = Math.max(0, baseLeft + delta);
+        const snapped = snapToBlockers(raw, orderWidthPx, order.lineId, blockersRef.current, timelineStartMs, pphRef.current);
         setSlidingId(order.id);
-        setSlidingLeft(Math.max(0, baseLeft + delta));
+        setSlidingLeft(snapped);
       };
 
       const onUp = (ev: MouseEvent) => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         if (moved && canSlide) {
-          const newLeft = Math.max(0, baseLeft + (ev.clientX - startX));
+          const raw = Math.max(0, baseLeft + (ev.clientX - startX));
+          const snapped = snapToBlockers(raw, orderWidthPx, order.lineId, blockersRef.current, timelineStartMs, pphRef.current);
           setSlidingId(null);
-          onUpdateOrder({ ...order, startTime: xToTime(newLeft).toISOString() });
+          onUpdateOrder({ ...order, startTime: xToTime(snapped).toISOString() });
         } else {
           setSlidingId(null);
           if (clickTimerRef.current) {
@@ -355,7 +434,6 @@ export default function GanttBoard({
           } else {
             clickTimerRef.current = setTimeout(() => {
               clickTimerRef.current = null;
-              // Selection only in edit mode, and never for closed orders
               if (!isEditMode || order.closed) { onOrderDoubleClick(order); return; }
               const next = new Set(selectedIdsRef.current);
               if (next.has(order.id)) next.delete(order.id);
@@ -370,7 +448,7 @@ export default function GanttBoard({
       window.addEventListener('mouseup', onUp);
     };
 
-  // Sidebar → board drop
+  // Sidebar → board drop (also snaps to blockers)
   const handleDrop = (e: React.DragEvent, lineId: LineId) => {
     if (!isEditMode) return;
     e.preventDefault();
@@ -383,7 +461,10 @@ export default function GanttBoard({
     const containerLeft = scrollRef.current?.getBoundingClientRect().left ?? 0;
     const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
     const rawX = (e.clientX - containerLeft) + scrollLeft - offsetX;
-    onUpdateOrder({ ...order, lineId, startTime: xToTime(Math.max(0, rawX)).toISOString() });
+    const lc = lineConfigs.find(l => l.id === lineId) ?? lineConfigs[0];
+    const orderWidthPx = (getDurationMs(order, lc) / 3600000) * pphRef.current;
+    const snapped = snapToBlockers(Math.max(0, rawX), orderWidthPx, lineId, blockersRef.current, timelineStartMs, pphRef.current);
+    onUpdateOrder({ ...order, lineId, startTime: xToTime(snapped).toISOString() });
     dragDataRef.current = null;
   };
 
@@ -399,6 +480,8 @@ export default function GanttBoard({
   }
 
   const lineConfig = (id: LineId) => lineConfigs.find(l => l.id === id) ?? lineConfigs[0];
+
+  const rowCursor = mode === 'pan' ? 'grab' : mode === 'blocker' ? 'crosshair' : 'crosshair';
 
   return (
     <div className="flex h-full">
@@ -436,7 +519,7 @@ export default function GanttBoard({
           </div>
 
           {/* Rows */}
-          <div ref={rowsRef} className="relative select-none" style={{ cursor: mode === 'pan' ? 'grab' : 'crosshair' }} onMouseDown={onRowsMouseDown}>
+          <div ref={rowsRef} className="relative select-none" style={{ cursor: rowCursor }} onMouseDown={onRowsMouseDown}>
             {LINES.map((line, lineIndex) => {
               const lc = lineConfig(line.id);
               const lineOrders = orders.filter(o => o.lineId === line.id && o.startTime);
@@ -464,11 +547,13 @@ export default function GanttBoard({
                     if (bLeft + bWidth < 0 || bLeft > totalWidth) return null;
                     return (
                       <div key={b.id} data-blocker="true"
-                        className="absolute top-0 bottom-0 flex items-center justify-center overflow-hidden z-10"
+                        onClick={isEditMode ? () => onBlockerEdit(b) : undefined}
+                        className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden z-10 ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}` }}>
                         <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
                         {isEditMode && (
-                          <button onClick={() => onDeleteBlocker(b.id)}
+                          <button
+                            onClick={e => { e.stopPropagation(); onDeleteBlocker(b.id); }}
                             className="absolute top-1 right-1 text-xs opacity-0 hover:opacity-100 transition-opacity"
                             style={{ color: b.color }}>✕</button>
                         )}
@@ -491,7 +576,7 @@ export default function GanttBoard({
                     return segs.map((seg, si) => (
                       <div key={`${order.id}-${si}`}
                         data-order-block="true"
-                        onMouseDown={makeSlideHandler(order, baseLeft)}
+                        onMouseDown={makeSlideHandler(order, baseLeft, lc)}
                         className="absolute top-2 rounded-md select-none flex items-center px-2 gap-1 overflow-hidden"
                         style={{
                           left: seg.left,
@@ -519,13 +604,24 @@ export default function GanttBoard({
 
                   {lineOrders.filter(o => !o.closed).length === 0 && (
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <span className="text-xs text-gray-700">{isEditMode ? 'Drop orders here' : ''}</span>
+                      <span className="text-xs text-gray-700">{isEditMode ? (mode === 'blocker' ? 'Drag to draw blocker' : 'Drop orders here') : ''}</span>
                     </div>
                   )}
                   <div className="hidden">{lineIndex}</div>
                 </div>
               );
             })}
+
+            {/* Blocker draw preview */}
+            {drawingBlocker && (() => {
+              const left = Math.min(drawingBlocker.startPx, drawingBlocker.currentPx);
+              const width = Math.abs(drawingBlocker.currentPx - drawingBlocker.startPx);
+              if (width < 2) return null;
+              return (
+                <div className="absolute pointer-events-none z-30 border-2 border-red-500 border-dashed bg-red-500/20"
+                  style={{ top: drawingBlocker.lineIndex * ROW_H, left, width, height: ROW_H }} />
+              );
+            })()}
 
             {redLineX >= 0 && redLineX <= totalWidth && (
               <div className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none" style={{ left: redLineX }} />
