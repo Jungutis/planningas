@@ -25,7 +25,7 @@ const LINES: { id: LineId; label: string }[] = [
 const LABEL_W = 160;
 const ROW_H = 72;
 const HEADER_H = 52;
-const TIMELINE_HOURS = 90 * 24;
+const TIMELINE_HOURS = 30 * 24;
 const SNAP_MIN = 15;
 
 function getTimelineStart(): Date {
