@@ -5,8 +5,25 @@ import http from 'http';
 import authRoutes from './routes/auth';
 import planningRoutes from './routes/planning';
 import { initWss } from './ws/wsServer';
+import { prisma } from './db';
 
 dotenv.config();
+
+const DEFAULT_LINE_CONFIGS = [
+  { id: 'xray', name: 'X-ray', cycleTimeSeconds: 20 },
+  { id: 'qlab', name: 'QLab', cycleTimeSeconds: 45 },
+  { id: 'smt4', name: 'SMT4', cycleTimeSeconds: 30 },
+];
+
+async function seedLineConfigs() {
+  for (const lc of DEFAULT_LINE_CONFIGS) {
+    await prisma.lineConfig.upsert({
+      where: { id: lc.id },
+      update: {},
+      create: lc,
+    });
+  }
+}
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3002', 10);
@@ -44,8 +61,15 @@ app.use((_req, res) => {
 const server = http.createServer(app);
 initWss(server);
 
-server.listen(PORT, () => {
-  console.log(`🚀 Planningas API veikia: http://localhost:${PORT}`);
-});
+seedLineConfigs()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`🚀 Planningas API veikia: http://localhost:${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('DB seed failed', err);
+    process.exit(1);
+  });
 
 export default app;

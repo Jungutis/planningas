@@ -15,3 +15,22 @@ model User {
   name         String?
   createdAt    DateTime @default(now())
 }
+
+model PlanningOrder {
+  id           String    @id @default(uuid())
+  partNumber   String
+  quantity     Int
+  color        String    @default("#3b82f6")
+  lineId       String?
+  startTime    DateTime?
+  closed       Boolean   @default(false)
+  comments     Json      @default("[]")
+  scrapPercent Float     @default(0)
+  createdAt    DateTime  @default(now())
+}
+
+model LineConfig {
+  id               String @id
+  name             String
+  cycleTimeSeconds Float
+}
