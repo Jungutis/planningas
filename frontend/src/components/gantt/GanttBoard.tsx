@@ -5,8 +5,10 @@ interface Props {
   orders: PlanningOrder[];
   lineConfigs: LineConfig[];
   userRole: UserRole;
+  selectedIds: Set<string>;
   onUpdateOrder: (order: PlanningOrder) => void;
-  onOrderClick: (order: PlanningOrder) => void;
+  onOrderDoubleClick: (order: PlanningOrder) => void;
+  onSelectionChange: (ids: Set<string>) => void;
 }
 
 const LINES: { id: LineId; label: string }[] = [
@@ -18,13 +20,13 @@ const LINES: { id: LineId; label: string }[] = [
 const LABEL_W = 110;
 const ROW_H = 72;
 const HEADER_H = 52;
-const TIMELINE_HOURS = 90 * 24; // 3 mėnesiai
+const TIMELINE_HOURS = 90 * 24;
 const SNAP_MIN = 15;
 
 function getTimelineStart(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - 7); // 1 savaitė praeityje
+  d.setDate(d.getDate() - 7);
   return d;
 }
 
@@ -50,14 +52,24 @@ function getDurationHours(order: PlanningOrder, lineConfig: LineConfig): number 
   return (order.quantity * lineConfig.cycleTimeSeconds) / 3600;
 }
 
-export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrder, onOrderClick }: Props) {
+interface LassoRect { x1: number; y1: number; x2: number; y2: number }
+
+export default function GanttBoard({
+  orders, lineConfigs, userRole, selectedIds,
+  onUpdateOrder, onOrderDoubleClick, onSelectionChange,
+}: Props) {
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
+  const [lasso, setLasso] = useState<LassoRect | null>(null);
   const timelineStart = useRef(getTimelineStart()).current;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const dragDataRef = useRef<{ orderId: string; offsetX: number } | null>(null);
+  const lassoStartRef = useRef<{ clientX: number; clientY: number; scrollLeft: number } | null>(null);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, scrollLeft: 0 });
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pphRef = useRef(pph);
   pphRef.current = pph;
 
@@ -70,7 +82,6 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     return () => clearInterval(tick);
   }, []);
 
-  // Scroll to current time - 2h on mount
   useEffect(() => {
     if (scrollRef.current) {
       const offsetHours = (new Date().getTime() - timelineStart.getTime()) / 3600000 - 2;
@@ -79,21 +90,18 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Wheel zoom — keeps point under cursor fixed
+  // Wheel zoom — keeps cursor point fixed
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const el = scrollRef.current;
     if (!el) return;
-
     const rect = el.getBoundingClientRect();
     const mouseOffsetX = e.clientX - rect.left;
     const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
-
     const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
     const newPph = Math.min(400, Math.max(0.3, pphRef.current * factor));
     pphRef.current = newPph;
     setPph(newPph);
-
     requestAnimationFrame(() => {
       if (scrollRef.current) {
         scrollRef.current.scrollLeft = timeAtMouse * newPph - mouseOffsetX;
@@ -108,23 +116,82 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
-  // Mouse pan
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
+  // Header mouse pan
+  const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-order-block]')) return;
     isPanningRef.current = true;
     panStartRef.current = { x: e.clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
     e.preventDefault();
   }, []);
 
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
+  const onHeaderMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isPanningRef.current || !scrollRef.current) return;
-    const dx = e.clientX - panStartRef.current.x;
-    scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+    scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.x);
   }, []);
 
-  const onMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
+  const onHeaderMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
+
+  // Rows lasso selection
+  const onRowsMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-order-block]')) return;
+    lassoStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      scrollLeft: scrollRef.current?.scrollLeft ?? 0,
+    };
+    setLasso(null);
+    onSelectionChange(new Set());
+    e.preventDefault();
+  }, [onSelectionChange]);
+
+  const onRowsMouseMove = useCallback((e: React.MouseEvent) => {
+    const start = lassoStartRef.current;
+    if (!start) return;
+    const dx = Math.abs(e.clientX - start.clientX);
+    const dy = Math.abs(e.clientY - start.clientY);
+    if (dx < 4 && dy < 4) return;
+    setLasso({
+      x1: Math.min(e.clientX, start.clientX),
+      y1: Math.min(e.clientY, start.clientY),
+      x2: Math.max(e.clientX, start.clientX),
+      y2: Math.max(e.clientY, start.clientY),
+    });
+  }, []);
+
+  const onRowsMouseUp = useCallback((e: React.MouseEvent) => {
+    const start = lassoStartRef.current;
+    lassoStartRef.current = null;
+    if (!start || !lasso || !rowsRef.current || !scrollRef.current) {
+      setLasso(null);
+      return;
+    }
+    // Convert lasso viewport coords → timeline space
+    const rowsRect = rowsRef.current.getBoundingClientRect();
+    const sl = scrollRef.current.scrollLeft;
+    const lx1 = Math.min(e.clientX, start.clientX) - rowsRect.left + sl;
+    const lx2 = Math.max(e.clientX, start.clientX) - rowsRect.left + sl;
+    const ly1 = Math.min(e.clientY, start.clientY) - rowsRect.top;
+    const ly2 = Math.max(e.clientY, start.clientY) - rowsRect.top;
+
+    const newSelected = new Set<string>();
+    orders.forEach(order => {
+      if (!order.startTime || !order.lineId || order.closed) return;
+      const lineIndex = LINES.findIndex(l => l.id === order.lineId);
+      if (lineIndex < 0) return;
+      const lc = lineConfigs.find(l => l.id === order.lineId) ?? lineConfigs[0];
+      const ox1 = ((new Date(order.startTime).getTime() - timelineStart.getTime()) / 3600000) * pphRef.current;
+      const ox2 = ox1 + getDurationHours(order, lc) * pphRef.current;
+      const oy1 = lineIndex * ROW_H;
+      const oy2 = (lineIndex + 1) * ROW_H;
+      if (lx1 < ox2 && lx2 > ox1 && ly1 < oy2 && ly2 > oy1) {
+        newSelected.add(order.id);
+      }
+    });
+    onSelectionChange(newSelected);
+    setLasso(null);
+  }, [lasso, orders, lineConfigs, timelineStart, onSelectionChange]);
 
   const xToTime = useCallback((rawX: number): Date => {
     const ms = (rawX / pph) * 3600000;
@@ -144,7 +211,6 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
 
   const redLineX = ((now.getTime() - timelineStart.getTime()) / 3600000) * pph;
 
-  // Generate ticks
   const ticks: { h: number; x: number; label: string; isMajor: boolean }[] = [];
   const totalTicks = TIMELINE_HOURS / tickInterval;
   for (let i = 0; i <= totalTicks; i++) {
@@ -152,14 +218,10 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     const t = new Date(timelineStart.getTime() + h * 3600000);
     const isMidnight = t.getHours() === 0 && t.getMinutes() === 0;
     const isMajor = tickInterval >= 24 ? true : (isMidnight && h > 0);
-    ticks.push({
-      h,
-      x: h * pph,
-      label: fmtTickLabel(t, tickInterval),
-      isMajor,
-    });
+    ticks.push({ h, x: h * pph, label: fmtTickLabel(t, tickInterval), isMajor });
   }
 
+  // DnD handlers
   const handleDragStart = (e: React.DragEvent, order: PlanningOrder) => {
     if (!canDrag) { e.preventDefault(); return; }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -177,14 +239,34 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     if (!orderId) return;
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
-
+    // Only allow drop on the order's assigned line
+    if (order.lineId && order.lineId !== lineId) return;
     const rowRect = e.currentTarget.getBoundingClientRect();
     const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
     const rawX = (e.clientX - rowRect.left) + scrollLeft - offsetX;
     const startTime = xToTime(Math.max(0, rawX)).toISOString();
-
     onUpdateOrder({ ...order, lineId, startTime });
     dragDataRef.current = null;
+  };
+
+  // Single click = select/deselect; double click = modal
+  const handleOrderClick = (e: React.MouseEvent, order: PlanningOrder) => {
+    e.stopPropagation();
+    if (clickTimerRef.current) {
+      // Double click
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      onOrderDoubleClick(order);
+    } else {
+      clickTimerRef.current = setTimeout(() => {
+        clickTimerRef.current = null;
+        // Single click — toggle selection
+        const next = new Set(selectedIds);
+        if (next.has(order.id)) next.delete(order.id);
+        else next.add(order.id);
+        onSelectionChange(next);
+      }, 220);
+    }
   };
 
   const lineConfig = (id: LineId) => lineConfigs.find(l => l.id === id) ?? lineConfigs[0];
@@ -210,28 +292,24 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
               }}
             />
             {line.label}
-            <span className="ml-auto text-xs text-gray-500 font-normal">
-              {lineConfig(line.id).cycleTimeSeconds}s
-            </span>
+            <span className="ml-auto text-xs text-gray-500 font-normal">{lineConfig(line.id).cycleTimeSeconds}s</span>
           </div>
         ))}
       </div>
 
       {/* Scrollable timeline */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-hidden relative"
-        style={{ cursor: isPanningRef.current ? 'grabbing' : 'grab' }}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
-      >
-        <div style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
-          {/* Time header */}
+      <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden relative">
+        <div style={{ width: totalWidth, minWidth: totalWidth }}>
+
+          {/* Time header — pan zone */}
           <div
+            ref={headerRef}
             className="bg-gray-950 border-b border-gray-700 relative overflow-hidden select-none"
-            style={{ height: HEADER_H }}
+            style={{ height: HEADER_H, cursor: 'grab' }}
+            onMouseDown={onHeaderMouseDown}
+            onMouseMove={onHeaderMouseMove}
+            onMouseUp={onHeaderMouseUp}
+            onMouseLeave={onHeaderMouseUp}
           >
             {ticks.map((tick, i) => (
               <div
@@ -250,19 +328,32 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
             )}
           </div>
 
-          {/* Rows */}
-          <div className="relative">
-            {LINES.map(line => {
-              const lineOrders = orders.filter(o => o.lineId === line.id);
+          {/* Rows — lasso zone */}
+          <div
+            ref={rowsRef}
+            className="relative select-none"
+            style={{ cursor: 'crosshair' }}
+            onMouseDown={onRowsMouseDown}
+            onMouseMove={onRowsMouseMove}
+            onMouseUp={onRowsMouseUp}
+            onMouseLeave={e => { if (lassoStartRef.current) onRowsMouseUp(e); }}
+          >
+            {LINES.map((line, lineIndex) => {
+              const lineOrders = orders.filter(o => o.lineId === line.id && o.startTime);
               return (
                 <div
                   key={line.id}
                   className="border-b border-gray-800 relative"
                   style={{ height: ROW_H }}
-                  onDragOver={e => { if (canDrag) e.preventDefault(); }}
+                  onDragOver={e => {
+                    if (!canDrag) return;
+                    const draggingId = dragDataRef.current?.orderId ?? e.dataTransfer.getData('orderId');
+                    const draggingOrder = orders.find(o => o.id === draggingId);
+                    if (draggingOrder?.lineId && draggingOrder.lineId !== line.id) return;
+                    e.preventDefault();
+                  }}
                   onDrop={e => handleDrop(e, line.id)}
                 >
-                  {/* Hour grid — pointer-events-none so drop works */}
                   {ticks.map((t, i) => (
                     <div
                       key={i}
@@ -271,11 +362,11 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
                     />
                   ))}
 
-                  {/* Order blocks */}
                   {lineOrders.map(order => {
                     const left = orderLeft(order);
                     const width = orderWidth(order, line.id);
                     if (left + width < 0 || left > totalWidth) return null;
+                    const isSelected = selectedIds.has(order.id);
                     return (
                       <div
                         key={order.id}
@@ -283,30 +374,39 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
                         draggable={canDrag && !order.closed}
                         onDragStart={e => handleDragStart(e, order)}
                         onMouseDown={e => e.stopPropagation()}
-                        onClick={() => onOrderClick(order)}
-                        className="absolute top-2 rounded-md border select-none cursor-pointer hover:brightness-110 transition-[filter] flex items-center px-2 gap-1 overflow-hidden"
+                        onClick={e => handleOrderClick(e, order)}
+                        className="absolute top-2 rounded-md border select-none cursor-pointer transition-[filter,box-shadow] flex items-center px-2 gap-1 overflow-hidden"
                         style={{
                           left,
                           width: Math.max(width, 40),
                           height: ROW_H - 16,
-                          backgroundColor: order.color + '33',
+                          backgroundColor: order.color + (isSelected ? '55' : '22'),
                           borderColor: order.color,
+                          borderWidth: isSelected ? 2 : 1,
                           opacity: order.closed ? 0.45 : 1,
+                          boxShadow: isSelected ? `0 0 0 2px ${order.color}88` : undefined,
                         }}
-                        title={`${order.partNumber} · ${order.quantity} vnt.`}
+                        title={`${order.partNumber} · ${order.quantity} vnt. | 2× klik = nustatymai`}
                       >
                         {order.closed && <span className="text-xs text-gray-400 shrink-0">✓</span>}
+                        {isSelected && <span className="text-xs shrink-0" style={{ color: order.color }}>●</span>}
                         <span className="text-xs font-semibold truncate" style={{ color: order.color }}>
                           {order.partNumber}
                         </span>
                         {width > 80 && (
-                          <span className="text-xs text-gray-400 shrink-0 ml-auto">
-                            {order.quantity}
-                          </span>
+                          <span className="text-xs text-gray-400 shrink-0 ml-auto">{order.quantity}</span>
                         )}
                       </div>
                     );
                   })}
+
+                  {/* Line label on empty rows */}
+                  {lineOrders.length === 0 && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <span className="text-xs text-gray-700">Vilk orderius čia</span>
+                    </div>
+                  )}
+                  <div className="hidden">{lineIndex}</div>
                 </div>
               );
             })}
@@ -321,6 +421,19 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
           </div>
         </div>
       </div>
+
+      {/* Lasso rect — fixed overlay */}
+      {lasso && (
+        <div
+          className="fixed pointer-events-none z-50 border border-blue-400 bg-blue-400/10"
+          style={{
+            left: lasso.x1,
+            top: lasso.y1,
+            width: lasso.x2 - lasso.x1,
+            height: lasso.y2 - lasso.y1,
+          }}
+        />
+      )}
     </div>
   );
 }

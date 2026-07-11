@@ -1,20 +1,27 @@
 import { useState } from 'react';
-import { ORDER_COLORS } from '../../types';
+import { LineId, ORDER_COLORS } from '../../types';
+
+const LINES: { id: LineId; label: string }[] = [
+  { id: 'smt4', label: 'SMT4' },
+  { id: 'qlab', label: 'QLab' },
+  { id: 'xray', label: 'X-ray' },
+];
 
 interface Props {
   onClose: () => void;
-  onCreate: (partNumber: string, quantity: number, color: string) => void;
+  onCreate: (partNumber: string, quantity: number, color: string, lineId: LineId) => void;
 }
 
 export default function CreateOrderModal({ onClose, onCreate }: Props) {
   const [partNumber, setPartNumber] = useState('');
   const [quantity, setQuantity] = useState('');
   const [color, setColor] = useState(ORDER_COLORS[0]);
+  const [lineId, setLineId] = useState<LineId>('smt4');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!partNumber.trim() || !quantity) return;
-    onCreate(partNumber.trim(), Number(quantity), color);
+    onCreate(partNumber.trim(), Number(quantity), color, lineId);
     onClose();
   };
 
@@ -23,6 +30,25 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-96 shadow-2xl">
         <h2 className="text-lg font-semibold text-white mb-5">Sukurti orderį</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Linija</label>
+            <div className="flex gap-2">
+              {LINES.map(l => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setLineId(l.id)}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+                    lineId === l.id
+                      ? 'bg-blue-600 border-blue-500 text-white'
+                      : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">Part Number</label>
             <input
@@ -54,10 +80,7 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
                   type="button"
                   onClick={() => setColor(c)}
                   className="w-7 h-7 rounded-full border-2 transition-transform hover:scale-110"
-                  style={{
-                    backgroundColor: c,
-                    borderColor: color === c ? '#fff' : 'transparent',
-                  }}
+                  style={{ backgroundColor: c, borderColor: color === c ? '#fff' : 'transparent' }}
                 />
               ))}
             </div>
