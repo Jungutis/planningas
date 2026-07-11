@@ -583,6 +583,20 @@ export default function GanttBoard({
             {redLineX >= 0 && redLineX <= totalWidth && (
               <div className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none" style={{ left: redLineX }} />
             )}
+
+            {/* Sliding order start line */}
+            {slidingId && (() => {
+              const t = new Date(timelineStartMs + (slidingLeft / pph) * 3600000);
+              const label = t.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+              return (
+                <div className="absolute top-0 bottom-0 pointer-events-none z-40" style={{ left: slidingLeft }}>
+                  <div className="absolute top-0 bottom-0 w-px bg-white/70" />
+                  <div className="absolute -top-0 left-1 bg-gray-900/90 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-white font-mono whitespace-nowrap shadow-lg">
+                    {label}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
