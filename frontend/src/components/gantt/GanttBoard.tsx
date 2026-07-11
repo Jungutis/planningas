@@ -18,30 +18,32 @@ const LINES: { id: LineId; label: string }[] = [
 const LABEL_W = 110;
 const ROW_H = 72;
 const HEADER_H = 52;
-const TIMELINE_HOURS = 72;
+const TIMELINE_HOURS = 90 * 24; // 3 mėnesiai
 const SNAP_MIN = 15;
 
-function getMidnight(): Date {
+function getTimelineStart(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - 1);
+  d.setDate(d.getDate() - 7); // 1 savaitė praeityje
   return d;
 }
 
-function fmtTime(d: Date): string {
+function fmtTickLabel(d: Date, intervalHours: number): string {
+  if (intervalHours >= 24) {
+    return d.toLocaleDateString('lt-LT', { weekday: 'short', day: 'numeric', month: 'numeric' });
+  }
+  if (d.getHours() === 0 && d.getMinutes() === 0) {
+    return d.toLocaleDateString('lt-LT', { weekday: 'short', day: 'numeric', month: 'numeric' });
+  }
   return d.toLocaleTimeString('lt-LT', { hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtDayLabel(d: Date): string {
-  return d.toLocaleDateString('lt-LT', { weekday: 'short', day: 'numeric', month: 'numeric' });
 }
 
 function getTickIntervalHours(pph: number): number {
   const minPx = 70;
-  for (const h of [0.25, 0.5, 1, 2, 4, 6, 12, 24]) {
+  for (const h of [0.25, 0.5, 1, 2, 4, 6, 12, 24, 48, 72, 168]) {
     if (h * pph >= minPx) return h;
   }
-  return 24;
+  return 168;
 }
 
 function getDurationHours(order: PlanningOrder, lineConfig: LineConfig): number {
@@ -49,9 +51,9 @@ function getDurationHours(order: PlanningOrder, lineConfig: LineConfig): number 
 }
 
 export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrder, onOrderClick }: Props) {
-  const [pph, setPph] = useState(80);
+  const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
-  const timelineStart = useRef(getMidnight()).current;
+  const timelineStart = useRef(getTimelineStart()).current;
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragDataRef = useRef<{ orderId: string; offsetX: number } | null>(null);
   const isPanningRef = useRef(false);
@@ -88,7 +90,7 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
 
     const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const newPph = Math.min(600, Math.max(15, pphRef.current * factor));
+    const newPph = Math.min(400, Math.max(0.3, pphRef.current * factor));
     pphRef.current = newPph;
     setPph(newPph);
 
@@ -148,12 +150,12 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
   for (let i = 0; i <= totalTicks; i++) {
     const h = i * tickInterval;
     const t = new Date(timelineStart.getTime() + h * 3600000);
-    const isDay = t.getHours() === 0 && t.getMinutes() === 0;
-    const isMajor = isDay && h > 0;
+    const isMidnight = t.getHours() === 0 && t.getMinutes() === 0;
+    const isMajor = tickInterval >= 24 ? true : (isMidnight && h > 0);
     ticks.push({
       h,
       x: h * pph,
-      label: isMajor ? fmtDayLabel(t) : fmtTime(t),
+      label: fmtTickLabel(t, tickInterval),
       isMajor,
     });
   }
