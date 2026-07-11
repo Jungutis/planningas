@@ -64,6 +64,8 @@ export default function GanttBoard({
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
   const [lasso, setLasso] = useState<LassoRect | null>(null);
+  const [slidingId, setSlidingId] = useState<string | null>(null);
+  const [slidingLeft, setSlidingLeft] = useState(0);
   const timelineStart = useRef(getTimelineStart()).current;
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -75,6 +77,8 @@ export default function GanttBoard({
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pphRef = useRef(pph);
   pphRef.current = pph;
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
 
   const canDrag = userRole === 'LOG';
   const totalWidth = TIMELINE_HOURS * pph;
@@ -233,17 +237,57 @@ export default function GanttBoard({
     ticks.push({ h, x: h * pph, label: fmtTickLabel(t, tickInterval), isMajor });
   }
 
-  // DnD handlers
-  const handleDragStart = (e: React.DragEvent, order: PlanningOrder) => {
-    if (!canDrag) { e.preventDefault(); return; }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    dragDataRef.current = { orderId: order.id, offsetX };
-    e.dataTransfer.setData('orderId', order.id);
-    e.dataTransfer.setData('dragOffsetX', String(offsetX));
-    e.dataTransfer.effectAllowed = 'move';
-  };
+  // Slide handler for orders already on board
+  const makeSlideHandler = (order: PlanningOrder, currentLeft: number) =>
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
 
+      const startX = e.clientX;
+      let moved = false;
+
+      const onMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX;
+        if (!moved && Math.abs(delta) < 5) return;
+        moved = true;
+        setSlidingId(order.id);
+        setSlidingLeft(Math.max(0, currentLeft + delta));
+      };
+
+      const onUp = (ev: MouseEvent) => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+
+        if (moved && canDrag && !order.closed) {
+          const newLeft = Math.max(0, currentLeft + (ev.clientX - startX));
+          setSlidingId(null);
+          const startTime = xToTime(newLeft).toISOString();
+          onUpdateOrder({ ...order, startTime });
+        } else {
+          setSlidingId(null);
+          // Single / double-click detection
+          if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+            onOrderDoubleClick(order);
+          } else {
+            clickTimerRef.current = setTimeout(() => {
+              clickTimerRef.current = null;
+              const next = new Set(selectedIdsRef.current);
+              if (next.has(order.id)) next.delete(order.id);
+              else next.add(order.id);
+              onSelectionChange(next);
+            }, 220);
+          }
+        }
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    };
+
+  // Sidebar → board drop handler
   const handleDrop = (e: React.DragEvent, lineId: LineId) => {
     e.preventDefault();
     const orderId = e.dataTransfer.getData('orderId') || dragDataRef.current?.orderId;
@@ -259,26 +303,6 @@ export default function GanttBoard({
     const startTime = xToTime(Math.max(0, rawX)).toISOString();
     onUpdateOrder({ ...order, lineId, startTime });
     dragDataRef.current = null;
-  };
-
-  // Single click = select/deselect; double click = modal
-  const handleOrderClick = (e: React.MouseEvent, order: PlanningOrder) => {
-    e.stopPropagation();
-    if (clickTimerRef.current) {
-      // Double click
-      clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
-      onOrderDoubleClick(order);
-    } else {
-      clickTimerRef.current = setTimeout(() => {
-        clickTimerRef.current = null;
-        // Single click — toggle selection
-        const next = new Set(selectedIds);
-        if (next.has(order.id)) next.delete(order.id);
-        else next.add(order.id);
-        onSelectionChange(next);
-      }, 220);
-    }
   };
 
   const lineConfig = (id: LineId) => lineConfigs.find(l => l.id === id) ?? lineConfigs[0];
@@ -369,28 +393,33 @@ export default function GanttBoard({
                   ))}
 
                   {lineOrders.map(order => {
-                    const left = orderLeft(order);
+                    const baseLeft = orderLeft(order);
+                    const left = slidingId === order.id ? slidingLeft : baseLeft;
                     const width = orderWidth(order, line.id);
-                    if (left + width < 0 || left > totalWidth) return null;
+                    if (baseLeft + width < 0 && slidingId !== order.id) return null;
+                    if (baseLeft > totalWidth && slidingId !== order.id) return null;
                     const isSelected = selectedIds.has(order.id);
+                    const isSliding = slidingId === order.id;
                     return (
                       <div
                         key={order.id}
                         data-order-block="true"
-                        draggable={canDrag && !order.closed}
-                        onDragStart={e => handleDragStart(e, order)}
-                        onMouseDown={e => e.stopPropagation()}
-                        onClick={e => handleOrderClick(e, order)}
-                        className="absolute top-2 rounded-md border select-none cursor-pointer transition-[filter,box-shadow] flex items-center px-2 gap-1 overflow-hidden"
+                        onMouseDown={makeSlideHandler(order, baseLeft)}
+                        className="absolute top-2 rounded-md border select-none flex items-center px-2 gap-1 overflow-hidden"
                         style={{
                           left,
                           width: Math.max(width, 40),
                           height: ROW_H - 16,
+                          cursor: canDrag && !order.closed ? (isSliding ? 'ew-resize' : 'grab') : 'pointer',
                           backgroundColor: order.color + (isSelected ? '55' : '22'),
                           borderColor: order.color,
                           borderWidth: isSelected ? 2 : 1,
                           opacity: order.closed ? 0.45 : 1,
-                          boxShadow: isSelected ? `0 0 0 2px ${order.color}88` : undefined,
+                          boxShadow: isSliding
+                            ? `0 4px 20px ${order.color}88`
+                            : isSelected ? `0 0 0 2px ${order.color}88` : undefined,
+                          zIndex: isSliding ? 30 : undefined,
+                          transition: isSliding ? 'none' : undefined,
                         }}
                         title={`${order.partNumber} · ${order.quantity} vnt. | 2× klik = nustatymai`}
                       >
