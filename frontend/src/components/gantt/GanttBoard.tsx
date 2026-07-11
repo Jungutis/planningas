@@ -132,7 +132,6 @@ export default function GanttBoard({
   const zoomTarget = useRef<{ scrollLeft: number; pph: number } | null>(null);
   const zoomRafId = useRef(0);
   const pendingZoom = useRef<{ factor: number; timeAtMouse: number; mouseOffsetX: number } | null>(null);
-  const zoomSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const totalWidth = TIMELINE_HOURS * pph;
