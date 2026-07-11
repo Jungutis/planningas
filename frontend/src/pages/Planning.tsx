@@ -80,7 +80,6 @@ export default function Planning() {
 
   const handleToggleEdit = useCallback(() => {
     if (!editMode) {
-      // Entering edit — snapshot current state
       editSnapshot.current = {
         orders: JSON.parse(JSON.stringify(ordersRef.current)),
         lineConfigs: JSON.parse(JSON.stringify(lineConfigsRef.current)),
@@ -89,6 +88,8 @@ export default function Planning() {
     } else {
       editSnapshot.current = null;
       setEditMode(false);
+      setBoardMode('pan');
+      setSelectedIds(new Set());
     }
   }, [editMode]);
 
@@ -96,6 +97,8 @@ export default function Planning() {
     const snap = editSnapshot.current;
     editSnapshot.current = null;
     setEditMode(false);
+    setBoardMode('pan');
+    setSelectedIds(new Set());
     if (!snap) return;
 
     // Restore local state immediately
@@ -158,7 +161,7 @@ export default function Planning() {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'h' || e.key === 'H') setBoardMode('pan');
-      if (e.key === 's' || e.key === 'S') setBoardMode('select');
+      if ((e.key === 's' || e.key === 'S') && editMode) setBoardMode('select');
       if ((e.key === 'Delete' || e.key === 'Backspace') && editMode) {
         const ids = selectedIds;
         if (ids.size === 0) return;
@@ -410,10 +413,12 @@ export default function Planning() {
               className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'pan' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
               <span>✋</span><span className="hidden sm:inline">Pan</span><span className="text-xs text-gray-600 ml-0.5">H</span>
             </button>
-            <button onClick={() => setBoardMode('select')} title="Select (S)"
-              className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'select' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
-              <span>⬚</span><span className="hidden sm:inline">Select</span><span className="text-xs text-gray-600 ml-0.5">S</span>
-            </button>
+            {isEditMode && (
+              <button onClick={() => setBoardMode('select')} title="Select (S)"
+                className={`flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium transition-colors ${boardMode === 'select' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+                <span>⬚</span><span className="hidden sm:inline">Select</span><span className="text-xs text-gray-600 ml-0.5">S</span>
+              </button>
+            )}
             {!sidebarOpen && (
               <button onClick={() => setSidebarOpen(true)} className="ml-auto text-xs text-gray-500 hover:text-gray-300 md:hidden">Show sidebar</button>
             )}

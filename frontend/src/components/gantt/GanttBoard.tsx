@@ -225,6 +225,7 @@ export default function GanttBoard({
 
   // Lasso
   const startLasso = useCallback((clientX: number, clientY: number) => {
+    if (!isEditMode) return; // selection only in edit mode
     lassoStartRef.current = { clientX, clientY, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
     setLasso(null);
     onSelectionChange(new Set());
@@ -337,6 +338,8 @@ export default function GanttBoard({
           } else {
             clickTimerRef.current = setTimeout(() => {
               clickTimerRef.current = null;
+              // Selection only available in edit mode
+              if (!isEditMode) { onOrderDoubleClick(order); return; }
               const next = new Set(selectedIdsRef.current);
               if (next.has(order.id)) next.delete(order.id);
               else next.add(order.id);
