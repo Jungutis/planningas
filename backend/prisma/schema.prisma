@@ -1,0 +1,17 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Lokaliai — SQLite (veikia iškart). Produkcijai pakeisti į postgresql + env DATABASE_URL.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+}
