@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { PlanningOrder, LineConfig, LineId, Blocker } from '../../types';
 
 export type BoardMode = 'pan' | 'select';
@@ -120,6 +120,10 @@ export default function GanttBoard({
   selectedIdsRef.current = selectedIds;
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
+  // Target scroll position to apply after DOM updates from a zoom
+  const zoomScrollTarget = useRef<{ timeAtMouse: number; mouseOffsetX: number; pph: number } | null>(null);
+  const zoomRafId = useRef(0);
+  const pendingZoom = useRef<{ factor: number; timeAtMouse: number; mouseOffsetX: number } | null>(null);
 
   const totalWidth = TIMELINE_HOURS * pph;
   const tickInterval = getTickIntervalHours(pph);
@@ -137,20 +141,41 @@ export default function GanttBoard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Wheel zoom — fixed-point
+  // After pph state change, DOM has been updated — now correct scrollLeft
+  useLayoutEffect(() => {
+    const target = zoomScrollTarget.current;
+    if (target && scrollRef.current) {
+      zoomScrollTarget.current = null;
+      scrollRef.current.scrollLeft = target.timeAtMouse * target.pph - target.mouseOffsetX;
+    }
+  }, [pph]);
+
+  // Wheel zoom: batch rapid events into one RAF, set scrollLeft via useLayoutEffect
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const el = scrollRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const mouseOffsetX = e.clientX - rect.left;
-    const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
-    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const newPph = Math.min(400, Math.max(0.3, pphRef.current * factor));
-    pphRef.current = newPph;
-    setPph(newPph);
-    requestAnimationFrame(() => {
-      if (scrollRef.current) scrollRef.current.scrollLeft = timeAtMouse * newPph - mouseOffsetX;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+
+    if (pendingZoom.current) {
+      // Accumulate factors, keep the first anchor point
+      pendingZoom.current.factor *= factor;
+    } else {
+      const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
+      pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
+    }
+
+    cancelAnimationFrame(zoomRafId.current);
+    zoomRafId.current = requestAnimationFrame(() => {
+      const z = pendingZoom.current;
+      if (!z) return;
+      pendingZoom.current = null;
+      const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
+      pphRef.current = newPph;
+      zoomScrollTarget.current = { timeAtMouse: z.timeAtMouse, mouseOffsetX: z.mouseOffsetX, pph: newPph };
+      setPph(newPph);
     });
   }, []);
 
