@@ -24,11 +24,11 @@ function getDurationMs(order: PlanningOrder, lcs: LineConfig[]) {
   return order.quantity * (lc?.cycleTimeSeconds ?? 30) * 1000;
 }
 
-// Push overlapping active orders on the same line to the right of the moved order
+// Push overlapping active orders on the same line to avoid overlap
 function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: LineConfig[]): PlanningOrder[] {
   if (!moved.lineId || !moved.startTime) return [moved];
-  const movedDur = getDurationMs(moved, lineConfigs);
-  const movedEnd = new Date(moved.startTime).getTime() + movedDur;
+  const movedStart = new Date(moved.startTime).getTime();
+  const movedEnd = movedStart + getDurationMs(moved, lineConfigs);
 
   const others = allOrders
     .filter(o => o.lineId === moved.lineId && o.startTime && o.id !== moved.id && !o.closed)
@@ -40,11 +40,13 @@ function cascade(allOrders: PlanningOrder[], moved: PlanningOrder, lineConfigs: 
   for (const o of others) {
     const dur = getDurationMs(o, lineConfigs);
     const start = new Date(o.startTime!).getTime();
-    if (start < frontier && start + dur > new Date(moved.startTime).getTime()) {
+    const end = start + dur;
+    // Only push if this order actually overlaps with [movedStart, frontier]
+    if (start < frontier && end > movedStart) {
       result.push({ ...o, startTime: new Date(frontier).toISOString() });
-      frontier += dur;
+      frontier = frontier + dur;
     } else {
-      frontier = Math.max(frontier, start + dur);
+      frontier = Math.max(frontier, end);
     }
   }
   return result;
@@ -74,10 +76,56 @@ export default function Planning() {
   ordersRef.current = orders;
   const lineConfigsRef = useRef(lineConfigs);
   lineConfigsRef.current = lineConfigs;
+  const editSnapshot = useRef<{ orders: PlanningOrder[]; lineConfigs: LineConfig[] } | null>(null);
+
+  const handleToggleEdit = useCallback(() => {
+    if (!editMode) {
+      // Entering edit — snapshot current state
+      editSnapshot.current = {
+        orders: JSON.parse(JSON.stringify(ordersRef.current)),
+        lineConfigs: JSON.parse(JSON.stringify(lineConfigsRef.current)),
+      };
+      setEditMode(true);
+    } else {
+      editSnapshot.current = null;
+      setEditMode(false);
+    }
+  }, [editMode]);
+
+  const handleCancelEdit = useCallback(async () => {
+    const snap = editSnapshot.current;
+    editSnapshot.current = null;
+    setEditMode(false);
+    if (!snap) return;
+
+    // Restore local state immediately
+    setOrders(snap.orders);
+    setLineConfigs(snap.lineConfigs);
+
+    // Revert changed orders in DB
+    const current = ordersRef.current;
+    await Promise.all(
+      snap.orders
+        .filter(so => {
+          const co = current.find(o => o.id === so.id);
+          return co && (co.startTime !== so.startTime || co.lineId !== so.lineId);
+        })
+        .map(so => apiPatch(`/orders/${so.id}`, { startTime: so.startTime, lineId: so.lineId }))
+    );
+    // Revert changed line configs
+    await Promise.all(
+      snap.lineConfigs
+        .filter(sl => {
+          const cl = lineConfigsRef.current.find(l => l.id === sl.id);
+          return cl && cl.cycleTimeSeconds !== sl.cycleTimeSeconds;
+        })
+        .map(sl => apiPatch(`/lines/${sl.id}`, { cycleTimeSeconds: sl.cycleTimeSeconds }))
+    );
+  }, []);
 
   // When role changes away from LOG, exit edit mode
   useEffect(() => {
-    if (userRole !== 'LOG') setEditMode(false);
+    if (userRole !== 'LOG') { editSnapshot.current = null; setEditMode(false); }
   }, [userRole]);
 
   useWs(useCallback((msg: WsMessage) => {
@@ -215,11 +263,24 @@ export default function Planning() {
         </div>
 
         {/* Edit mode toggle — LOG only */}
-        {userRole === 'LOG' && (
-          <button onClick={() => setEditMode(e => !e)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors border ${isEditMode ? 'bg-amber-600 border-amber-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white'}`}>
-            ✏ {isEditMode ? 'Editing' : 'Edit'}
+        {userRole === 'LOG' && !isEditMode && (
+          <button onClick={handleToggleEdit}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors border bg-gray-800 border-gray-600 text-gray-400 hover:text-white">
+            ✏ Edit
           </button>
+        )}
+        {isEditMode && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-amber-400 font-semibold px-2 hidden sm:inline">Editing</span>
+            <button onClick={handleToggleEdit}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold border bg-amber-600 border-amber-500 text-white hover:bg-amber-500 transition-colors">
+              ✓ Done
+            </button>
+            <button onClick={handleCancelEdit}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold border bg-gray-800 border-gray-600 text-gray-400 hover:text-white transition-colors">
+              ✕ Cancel
+            </button>
+          </div>
         )}
 
         <div className="flex-1" />
