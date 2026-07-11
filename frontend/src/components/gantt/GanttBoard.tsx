@@ -123,7 +123,6 @@ export default function GanttBoard({
   const panStartRef = useRef({ x: 0, scrollLeft: 0 });
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pphRef = useRef(pph);
-  pphRef.current = pph;
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
   const ordersRef = useRef(orders);
@@ -133,6 +132,8 @@ export default function GanttBoard({
   const zoomTarget = useRef<{ scrollLeft: number; pph: number } | null>(null);
   const zoomRafId = useRef(0);
   const pendingZoom = useRef<{ factor: number; timeAtMouse: number; mouseOffsetX: number } | null>(null);
+  const zoomSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const totalWidth = TIMELINE_HOURS * pph;
   const tickInterval = getTickIntervalHours(pph);
@@ -190,9 +191,20 @@ export default function GanttBoard({
       const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
       const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
+      // Update DOM directly — no React re-render during zoom
+      const newTotalWidth = TIMELINE_HOURS * newPph;
+      if (contentRef.current) {
+        contentRef.current.style.width = newTotalWidth + 'px';
+        contentRef.current.style.minWidth = newTotalWidth + 'px';
+      }
       if (scrollRef.current) scrollRef.current.scrollLeft = newScrollLeft;
       zoomTarget.current = { scrollLeft: newScrollLeft, pph: newPph };
-      setPph(newPph);
+      // Commit to React state only when zoom stops
+      if (zoomSettleTimer.current) clearTimeout(zoomSettleTimer.current);
+      zoomSettleTimer.current = setTimeout(() => {
+        zoomSettleTimer.current = null;
+        setPph(pphRef.current);
+      }, 150);
     });
   }, []);
 
@@ -487,7 +499,7 @@ export default function GanttBoard({
 
       {/* Scrollable timeline */}
       <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden">
-        <div style={{ width: totalWidth, minWidth: totalWidth }}>
+        <div ref={contentRef} style={{ width: totalWidth, minWidth: totalWidth }}>
           {/* Header */}
           <div ref={headerRef} className="bg-gray-950 border-b border-gray-700 relative overflow-hidden select-none" style={{ height: HEADER_H, cursor: 'grab' }} onMouseDown={onHeaderMouseDown}>
             {ticks.map((tick, i) => (
