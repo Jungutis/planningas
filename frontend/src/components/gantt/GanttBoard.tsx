@@ -20,7 +20,7 @@ const LINES: { id: LineId; label: string }[] = [
   { id: 'smt4', label: 'SMT4' },
 ];
 
-const LABEL_W = 110;
+const LABEL_W = 160;
 const ROW_H = 72;
 const HEADER_H = 52;
 const TIMELINE_HOURS = 90 * 24;
