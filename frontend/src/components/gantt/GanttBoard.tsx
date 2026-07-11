@@ -36,33 +36,93 @@ function fmtDayLabel(d: Date): string {
   return d.toLocaleDateString('lt-LT', { weekday: 'short', day: 'numeric', month: 'numeric' });
 }
 
+function getTickIntervalHours(pph: number): number {
+  const minPx = 70;
+  for (const h of [0.25, 0.5, 1, 2, 4, 6, 12, 24]) {
+    if (h * pph >= minPx) return h;
+  }
+  return 24;
+}
+
 function getDurationHours(order: PlanningOrder, lineConfig: LineConfig): number {
   return (order.quantity * lineConfig.cycleTimeSeconds) / 3600;
 }
 
 export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrder, onOrderClick }: Props) {
-  const [pph, setPph] = useState(80); // pixels per hour
+  const [pph, setPph] = useState(80);
   const [now, setNow] = useState(new Date());
   const timelineStart = useRef(getMidnight()).current;
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragDataRef = useRef<{ orderId: string; offsetX: number } | null>(null);
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ x: 0, scrollLeft: 0 });
+  const pphRef = useRef(pph);
+  pphRef.current = pph;
 
   const canDrag = userRole === 'LOG';
   const totalWidth = TIMELINE_HOURS * pph;
+  const tickInterval = getTickIntervalHours(pph);
 
   useEffect(() => {
-    const tick = setInterval(() => setNow(new Date()), 5000);
+    const tick = setInterval(() => setNow(new Date()), 10000);
     return () => clearInterval(tick);
   }, []);
 
   // Scroll to current time - 2h on mount
   useEffect(() => {
     if (scrollRef.current) {
-      const offsetHours = (now.getTime() - timelineStart.getTime()) / 3600000 - 2;
+      const offsetHours = (new Date().getTime() - timelineStart.getTime()) / 3600000 - 2;
       scrollRef.current.scrollLeft = Math.max(0, offsetHours * pph);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Wheel zoom — keeps point under cursor fixed
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const rect = el.getBoundingClientRect();
+    const mouseOffsetX = e.clientX - rect.left;
+    const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
+
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const newPph = Math.min(600, Math.max(15, pphRef.current * factor));
+    pphRef.current = newPph;
+    setPph(newPph);
+
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollLeft = timeAtMouse * newPph - mouseOffsetX;
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
+  // Mouse pan
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-order-block]')) return;
+    isPanningRef.current = true;
+    panStartRef.current = { x: e.clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
+    e.preventDefault();
+  }, []);
+
+  const onMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanningRef.current || !scrollRef.current) return;
+    const dx = e.clientX - panStartRef.current.x;
+    scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+  }, []);
+
+  const onMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
 
   const xToTime = useCallback((rawX: number): Date => {
     const ms = (rawX / pph) * 3600000;
@@ -82,17 +142,19 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
 
   const redLineX = ((now.getTime() - timelineStart.getTime()) / 3600000) * pph;
 
-  // Build hour tick data
-  const ticks: { h: number; x: number; label: string; isDay: boolean }[] = [];
-  for (let h = 0; h <= TIMELINE_HOURS; h++) {
+  // Generate ticks
+  const ticks: { h: number; x: number; label: string; isMajor: boolean }[] = [];
+  const totalTicks = TIMELINE_HOURS / tickInterval;
+  for (let i = 0; i <= totalTicks; i++) {
+    const h = i * tickInterval;
     const t = new Date(timelineStart.getTime() + h * 3600000);
-    const isDay = t.getHours() === 0;
-    const showLabel = h % 2 === 0;
+    const isDay = t.getHours() === 0 && t.getMinutes() === 0;
+    const isMajor = isDay && h > 0;
     ticks.push({
       h,
       x: h * pph,
-      label: showLabel ? (isDay && h > 0 ? fmtDayLabel(t) : fmtTime(t)) : '',
-      isDay,
+      label: isMajor ? fmtDayLabel(t) : fmtTime(t),
+      isMajor,
     });
   }
 
@@ -109,7 +171,7 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
   const handleDrop = (e: React.DragEvent, lineId: LineId) => {
     e.preventDefault();
     const orderId = e.dataTransfer.getData('orderId') || dragDataRef.current?.orderId;
-    const offsetX = Number(e.dataTransfer.getData('dragOffsetX') ?? dragDataRef.current?.offsetX ?? 0);
+    const offsetX = Number(e.dataTransfer.getData('dragOffsetX') || dragDataRef.current?.offsetX || 0);
     if (!orderId) return;
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
@@ -123,18 +185,10 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
     dragDataRef.current = null;
   };
 
-  const zoom = (delta: number) => setPph(p => Math.min(400, Math.max(20, p + delta)));
-
   const lineConfig = (id: LineId) => lineConfigs.find(l => l.id === id) ?? lineConfigs[0];
 
   return (
     <div className="flex h-full">
-      {/* Zoom controls */}
-      <div className="absolute bottom-4 right-4 flex gap-2 z-30">
-        <button onClick={() => zoom(-20)} className="w-8 h-8 bg-gray-800 border border-gray-600 rounded-lg text-white hover:bg-gray-700 flex items-center justify-center text-lg font-bold">−</button>
-        <button onClick={() => zoom(20)} className="w-8 h-8 bg-gray-800 border border-gray-600 rounded-lg text-white hover:bg-gray-700 flex items-center justify-center text-lg font-bold">+</button>
-      </div>
-
       {/* Label column */}
       <div className="shrink-0 bg-gray-900 border-r border-gray-700 z-10" style={{ width: LABEL_W }}>
         <div className="border-b border-gray-700" style={{ height: HEADER_H }} />
@@ -146,37 +200,49 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
           >
             <span
               className="w-2 h-2 rounded-full mr-2 shrink-0"
-              style={{ backgroundColor: lineConfig(line.id).cycleTimeSeconds < 35 ? '#22c55e' : lineConfig(line.id).cycleTimeSeconds < 50 ? '#eab308' : '#ef4444' }}
+              style={{
+                backgroundColor:
+                  lineConfig(line.id).cycleTimeSeconds < 35 ? '#22c55e'
+                  : lineConfig(line.id).cycleTimeSeconds < 50 ? '#eab308'
+                  : '#ef4444',
+              }}
             />
             {line.label}
+            <span className="ml-auto text-xs text-gray-500 font-normal">
+              {lineConfig(line.id).cycleTimeSeconds}s
+            </span>
           </div>
         ))}
       </div>
 
       {/* Scrollable timeline */}
-      <div ref={scrollRef} className="flex-1 overflow-x-auto relative">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-x-auto overflow-y-hidden relative"
+        style={{ cursor: isPanningRef.current ? 'grabbing' : 'grab' }}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseUp}
+      >
         <div style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
           {/* Time header */}
           <div
-            className="sticky top-0 bg-gray-950 border-b border-gray-700 z-20 relative overflow-hidden"
+            className="bg-gray-950 border-b border-gray-700 relative overflow-hidden select-none"
             style={{ height: HEADER_H }}
           >
-            {ticks.map(tick => tick.label && (
+            {ticks.map((tick, i) => (
               <div
-                key={tick.h}
-                className="absolute top-0 flex flex-col items-start"
+                key={i}
+                className="absolute top-0 bottom-0 flex flex-col justify-end pb-1 pl-1"
                 style={{ left: tick.x }}
               >
-                <div
-                  className={`h-full border-l ${tick.isDay ? 'border-gray-400' : 'border-gray-700'} pt-1 pl-1`}
-                >
-                  <span className={`text-xs whitespace-nowrap ${tick.isDay ? 'text-gray-300 font-semibold' : 'text-gray-500'}`}>
-                    {tick.label}
-                  </span>
-                </div>
+                <div className={`absolute top-0 bottom-0 border-l ${tick.isMajor ? 'border-gray-400' : 'border-gray-700'}`} />
+                <span className={`text-xs whitespace-nowrap relative z-10 ${tick.isMajor ? 'text-gray-300 font-semibold' : 'text-gray-500'}`}>
+                  {tick.label}
+                </span>
               </div>
             ))}
-            {/* Red line in header */}
             {redLineX >= 0 && redLineX <= totalWidth && (
               <div className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none" style={{ left: redLineX }} />
             )}
@@ -194,11 +260,11 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
                   onDragOver={e => { if (canDrag) e.preventDefault(); }}
                   onDrop={e => handleDrop(e, line.id)}
                 >
-                  {/* Hour grid */}
-                  {ticks.filter(t => t.h % 2 === 0).map(t => (
+                  {/* Hour grid — pointer-events-none so drop works */}
+                  {ticks.map((t, i) => (
                     <div
-                      key={t.h}
-                      className="absolute top-0 bottom-0 border-l border-gray-800"
+                      key={i}
+                      className={`absolute top-0 bottom-0 border-l pointer-events-none ${t.isMajor ? 'border-gray-600' : 'border-gray-800'}`}
                       style={{ left: t.x }}
                     />
                   ))}
@@ -211,10 +277,12 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
                     return (
                       <div
                         key={order.id}
+                        data-order-block="true"
                         draggable={canDrag && !order.closed}
                         onDragStart={e => handleDragStart(e, order)}
+                        onMouseDown={e => e.stopPropagation()}
                         onClick={() => onOrderClick(order)}
-                        className="absolute top-2 rounded-md border select-none cursor-pointer hover:brightness-110 active:scale-[0.99] transition-[filter] flex items-center px-2 gap-1 overflow-hidden"
+                        className="absolute top-2 rounded-md border select-none cursor-pointer hover:brightness-110 transition-[filter] flex items-center px-2 gap-1 overflow-hidden"
                         style={{
                           left,
                           width: Math.max(width, 40),
@@ -241,19 +309,16 @@ export default function GanttBoard({ orders, lineConfigs, userRole, onUpdateOrde
               );
             })}
 
-            {/* Red current time line */}
+            {/* Red current-time line */}
             {redLineX >= 0 && redLineX <= totalWidth && (
               <div
-                className="absolute top-0 bottom-0 z-20 pointer-events-none flex flex-col items-center"
+                className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none"
                 style={{ left: redLineX }}
-              >
-                <div className="w-0.5 bg-red-500 h-full" />
-              </div>
+              />
             )}
           </div>
         </div>
       </div>
-
     </div>
   );
 }
