@@ -1,11 +1,14 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { PlanningOrder, LineConfig, LineId, UserRole } from '../../types';
 
+export type BoardMode = 'pan' | 'select';
+
 interface Props {
   orders: PlanningOrder[];
   lineConfigs: LineConfig[];
   userRole: UserRole;
   selectedIds: Set<string>;
+  mode: BoardMode;
   onUpdateOrder: (order: PlanningOrder) => void;
   onOrderDoubleClick: (order: PlanningOrder) => void;
   onSelectionChange: (ids: Set<string>) => void;
@@ -55,7 +58,7 @@ function getDurationHours(order: PlanningOrder, lineConfig: LineConfig): number 
 interface LassoRect { x1: number; y1: number; x2: number; y2: number }
 
 export default function GanttBoard({
-  orders, lineConfigs, userRole, selectedIds,
+  orders, lineConfigs, userRole, selectedIds, mode,
   onUpdateOrder, onOrderDoubleClick, onSelectionChange,
 }: Props) {
   const [pph, setPph] = useState(6);
@@ -131,22 +134,32 @@ export default function GanttBoard({
 
   const onHeaderMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
 
-  // Rows lasso selection
+  // Rows mousedown — pan or lasso depending on mode
   const onRowsMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('[data-order-block]')) return;
-    lassoStartRef.current = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-    };
-    setLasso(null);
-    onSelectionChange(new Set());
+
+    if (mode === 'pan') {
+      isPanningRef.current = true;
+      panStartRef.current = { x: e.clientX, scrollLeft: scrollRef.current?.scrollLeft ?? 0 };
+    } else {
+      lassoStartRef.current = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        scrollLeft: scrollRef.current?.scrollLeft ?? 0,
+      };
+      setLasso(null);
+      onSelectionChange(new Set());
+    }
     e.preventDefault();
-  }, [onSelectionChange]);
+  }, [mode, onSelectionChange]);
 
   const onRowsMouseMove = useCallback((e: React.MouseEvent) => {
+    if (mode === 'pan' && isPanningRef.current && scrollRef.current) {
+      scrollRef.current.scrollLeft = panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.x);
+      return;
+    }
     const start = lassoStartRef.current;
     if (!start) return;
     const dx = Math.abs(e.clientX - start.clientX);
@@ -161,6 +174,7 @@ export default function GanttBoard({
   }, []);
 
   const onRowsMouseUp = useCallback((e: React.MouseEvent) => {
+    if (mode === 'pan') { isPanningRef.current = false; return; }
     const start = lassoStartRef.current;
     lassoStartRef.current = null;
     if (!start || !lasso || !rowsRef.current || !scrollRef.current) {
@@ -332,7 +346,7 @@ export default function GanttBoard({
           <div
             ref={rowsRef}
             className="relative select-none"
-            style={{ cursor: 'crosshair' }}
+            style={{ cursor: mode === 'pan' ? 'grab' : 'crosshair' }}
             onMouseDown={onRowsMouseDown}
             onMouseMove={onRowsMouseMove}
             onMouseUp={onRowsMouseUp}

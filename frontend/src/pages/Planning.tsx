@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { PlanningOrder, LineConfig, LineId, UserRole, WsMessage } from '../types';
 import { useWs } from '../hooks/useWs';
-import GanttBoard from '../components/gantt/GanttBoard';
+import GanttBoard, { BoardMode } from '../components/gantt/GanttBoard';
 import OrderModal from '../components/gantt/OrderModal';
 import CreateOrderModal from '../components/gantt/CreateOrderModal';
 
@@ -52,6 +52,7 @@ export default function Planning() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [boardMode, setBoardMode] = useState<BoardMode>('pan');
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
 
@@ -77,6 +78,17 @@ export default function Planning() {
       setLineConfigs(prev => prev.map(l => l.id === msg.lineConfig.id ? msg.lineConfig : l));
     }
   }, []));
+
+  // H = pan, S = select keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
+      if (e.key === 'h' || e.key === 'H') setBoardMode('pan');
+      if (e.key === 's' || e.key === 'S') setBoardMode('select');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // DELETE key — unassign selected orders from board (return to sidebar)
   useEffect(() => {
@@ -278,17 +290,50 @@ export default function Planning() {
           </div>
         </aside>
 
-        {/* Gantt */}
-        <div className="flex-1 overflow-hidden relative">
-          <GanttBoard
-            orders={orders}
-            lineConfigs={lineConfigs}
-            userRole={userRole}
-            selectedIds={selectedIds}
-            onUpdateOrder={handleUpdateOrder}
-            onOrderDoubleClick={setModalOrder}
-            onSelectionChange={setSelectedIds}
-          />
+        {/* Gantt + toolbar */}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {/* Mode toolbar */}
+          <div className="flex items-center gap-1 px-3 py-1.5 bg-gray-900 border-b border-gray-700 shrink-0">
+            <button
+              onClick={() => setBoardMode('pan')}
+              title="Slinkti (H)"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                boardMode === 'pan'
+                  ? 'bg-gray-700 text-white'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <span className="text-base">✋</span>
+              <span>Slinkti</span>
+              <span className="text-xs text-gray-600 ml-1">H</span>
+            </button>
+            <button
+              onClick={() => setBoardMode('select')}
+              title="Žymėti (S)"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                boardMode === 'select'
+                  ? 'bg-gray-700 text-white'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <span className="text-base">⬚</span>
+              <span>Žymėti</span>
+              <span className="text-xs text-gray-600 ml-1">S</span>
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-hidden">
+            <GanttBoard
+              orders={orders}
+              lineConfigs={lineConfigs}
+              userRole={userRole}
+              selectedIds={selectedIds}
+              mode={boardMode}
+              onUpdateOrder={handleUpdateOrder}
+              onOrderDoubleClick={setModalOrder}
+              onSelectionChange={setSelectedIds}
+            />
+          </div>
         </div>
       </div>
 
