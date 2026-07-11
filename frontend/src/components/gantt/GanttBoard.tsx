@@ -15,7 +15,6 @@ interface Props {
   onSelectionChange: (ids: Set<string>) => void;
   onBlockerDraw: (lineId: LineId, startTime: string, endTime: string) => void;
   onBlockerEdit: (blocker: Blocker) => void;
-  onDeleteBlocker: (id: string) => void;
 }
 
 const LINES: { id: LineId; label: string }[] = [
@@ -95,41 +94,8 @@ function getSegments(
   }));
 }
 
-// Snap a desired pixel position so the order doesn't overlap any blocker
-function snapToBlockers(
-  desiredPx: number,
-  orderWidthPx: number,
-  lineId: LineId | null,
-  blockers: Blocker[],
-  timelineStartMs: number,
-  pph: number,
-): number {
-  const rel = blockers
-    .filter(b => b.lineId === null || b.lineId === lineId)
-    .map(b => ({
-      l: ((new Date(b.startTime).getTime() - timelineStartMs) / 3600000) * pph,
-      r: ((new Date(b.endTime).getTime() - timelineStartMs) / 3600000) * pph,
-    }))
-    .sort((a, b) => a.l - b.l);
 
-  let pos = desiredPx;
-  // Iteratively resolve overlaps (handles adjacent blockers)
-  for (let iter = 0; iter < rel.length; iter++) {
-    let changed = false;
-    for (const b of rel) {
-      if (pos < b.r && pos + orderWidthPx > b.l) {
-        // Snap to whichever blocker edge is closer to desired position
-        const snapBefore = b.l - orderWidthPx;
-        const snapAfter = b.r;
-        pos = Math.abs(desiredPx - snapBefore) <= Math.abs(desiredPx - snapAfter) ? snapBefore : snapAfter;
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) break;
-  }
-  return Math.max(0, pos);
-}
+const DEFAULT_PPH = 6;
 
 interface LassoRect { x1: number; y1: number; x2: number; y2: number }
 interface DrawingBlocker { lineId: LineId; lineIndex: number; startPx: number; currentPx: number }
@@ -137,7 +103,7 @@ interface DrawingBlocker { lineId: LineId; lineIndex: number; startPx: number; c
 export default function GanttBoard({
   orders, lineConfigs, blockers, selectedIds, mode, isEditMode,
   onUpdateOrder, onOrderDoubleClick, onSelectionChange,
-  onBlockerDraw, onBlockerEdit, onDeleteBlocker,
+  onBlockerDraw, onBlockerEdit,
 }: Props) {
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
@@ -394,8 +360,8 @@ export default function GanttBoard({
     return ((new Date(order.startTime).getTime() - timelineStartMs) / 3600000) * pph;
   }, [pph, timelineStartMs]);
 
-  // Slide handler — snaps order position so it can't pass through blockers
-  const makeSlideHandler = (order: PlanningOrder, baseLeft: number, lc: LineConfig) =>
+  // Slide handler — orders can overlap blockers (getSegments splits them visually)
+  const makeSlideHandler = (order: PlanningOrder, baseLeft: number) =>
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
       e.stopPropagation();
@@ -404,27 +370,23 @@ export default function GanttBoard({
       const canSlide = isEditMode && !order.closed;
       const startX = e.clientX;
       let moved = false;
-      const orderWidthPx = (getDurationMs(order, lc) / 3600000) * pphRef.current;
 
       const onMove = (ev: MouseEvent) => {
         if (!canSlide) return;
         const delta = ev.clientX - startX;
         if (!moved && Math.abs(delta) < 5) return;
         moved = true;
-        const raw = Math.max(0, baseLeft + delta);
-        const snapped = snapToBlockers(raw, orderWidthPx, order.lineId, blockersRef.current, timelineStartMs, pphRef.current);
         setSlidingId(order.id);
-        setSlidingLeft(snapped);
+        setSlidingLeft(Math.max(0, baseLeft + delta));
       };
 
       const onUp = (ev: MouseEvent) => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         if (moved && canSlide) {
-          const raw = Math.max(0, baseLeft + (ev.clientX - startX));
-          const snapped = snapToBlockers(raw, orderWidthPx, order.lineId, blockersRef.current, timelineStartMs, pphRef.current);
+          const newLeft = Math.max(0, baseLeft + (ev.clientX - startX));
           setSlidingId(null);
-          onUpdateOrder({ ...order, startTime: xToTime(snapped).toISOString() });
+          onUpdateOrder({ ...order, startTime: xToTime(newLeft).toISOString() });
         } else {
           setSlidingId(null);
           if (clickTimerRef.current) {
@@ -448,7 +410,7 @@ export default function GanttBoard({
       window.addEventListener('mouseup', onUp);
     };
 
-  // Sidebar → board drop (also snaps to blockers)
+  // Sidebar → board drop
   const handleDrop = (e: React.DragEvent, lineId: LineId) => {
     if (!isEditMode) return;
     e.preventDefault();
@@ -461,10 +423,7 @@ export default function GanttBoard({
     const containerLeft = scrollRef.current?.getBoundingClientRect().left ?? 0;
     const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
     const rawX = (e.clientX - containerLeft) + scrollLeft - offsetX;
-    const lc = lineConfigs.find(l => l.id === lineId) ?? lineConfigs[0];
-    const orderWidthPx = (getDurationMs(order, lc) / 3600000) * pphRef.current;
-    const snapped = snapToBlockers(Math.max(0, rawX), orderWidthPx, lineId, blockersRef.current, timelineStartMs, pphRef.current);
-    onUpdateOrder({ ...order, lineId, startTime: xToTime(snapped).toISOString() });
+    onUpdateOrder({ ...order, lineId, startTime: xToTime(Math.max(0, rawX)).toISOString() });
     dragDataRef.current = null;
   };
 
@@ -487,7 +446,11 @@ export default function GanttBoard({
     <div className="flex h-full">
       {/* Label column */}
       <div className="shrink-0 bg-gray-900 border-r border-gray-700 z-10" style={{ width: LABEL_W }}>
-        <div className="border-b border-gray-700" style={{ height: HEADER_H }} />
+        <div className="border-b border-gray-700 flex items-end justify-end px-2 pb-1" style={{ height: HEADER_H }}>
+          <span className="text-xs font-mono text-gray-500 select-none" title="Zoom level">
+            {Math.round(pph / DEFAULT_PPH * 100)}%
+          </span>
+        </div>
         {LINES.map(line => {
           const lc = lineConfig(line.id);
           return (
@@ -551,12 +514,6 @@ export default function GanttBoard({
                         className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden z-10 ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}` }}>
                         <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
-                        {isEditMode && (
-                          <button
-                            onClick={e => { e.stopPropagation(); onDeleteBlocker(b.id); }}
-                            className="absolute top-1 right-1 text-xs opacity-0 hover:opacity-100 transition-opacity"
-                            style={{ color: b.color }}>✕</button>
-                        )}
                       </div>
                     );
                   })}
@@ -576,7 +533,7 @@ export default function GanttBoard({
                     return segs.map((seg, si) => (
                       <div key={`${order.id}-${si}`}
                         data-order-block="true"
-                        onMouseDown={makeSlideHandler(order, baseLeft, lc)}
+                        onMouseDown={makeSlideHandler(order, baseLeft)}
                         className="absolute top-2 rounded-md select-none flex items-center px-2 gap-1 overflow-hidden"
                         style={{
                           left: seg.left,

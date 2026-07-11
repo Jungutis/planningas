@@ -460,7 +460,6 @@ export default function Planning() {
               onSelectionChange={setSelectedIds}
               onBlockerDraw={handleBlockerDraw}
               onBlockerEdit={handleBlockerEdit}
-              onDeleteBlocker={handleDeleteBlocker}
             />
           </div>
         </div>
