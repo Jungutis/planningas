@@ -11,10 +11,11 @@ router.get('/state', (_req: Request, res: Response) => {
 });
 
 router.post('/orders', (req: Request, res: Response) => {
-  const { partNumber, quantity, color } = req.body as {
+  const { partNumber, quantity, color, lineId } = req.body as {
     partNumber: string;
     quantity: number;
     color?: string;
+    lineId?: string;
   };
 
   if (!partNumber || !quantity) {
@@ -27,7 +28,7 @@ router.post('/orders', (req: Request, res: Response) => {
     partNumber,
     quantity: Number(quantity),
     color: color || '#3b82f6',
-    lineId: null,
+    lineId: (lineId as PlanningOrder['lineId']) ?? null,
     startTime: null,
     closed: false,
     comments: [],
