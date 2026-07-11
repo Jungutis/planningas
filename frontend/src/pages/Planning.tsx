@@ -19,10 +19,6 @@ async function apiPost(path: string, body: object): Promise<unknown> {
   return res.json();
 }
 
-function getDurationMs(order: PlanningOrder, lcs: LineConfig[]) {
-  const lc = lcs.find(l => l.id === order.lineId) ?? lcs[0];
-  return order.quantity * (lc?.cycleTimeSeconds ?? 30) * 1000;
-}
 
 
 const ROLE_COLORS: Record<UserRole, string> = { Q: 'bg-purple-600', LOG: 'bg-blue-600', PROD: 'bg-green-600' };
