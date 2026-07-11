@@ -243,7 +243,7 @@ export default function Planning() {
             )}
 
             {/* Group by line */}
-            {(['smt4', 'qlab', 'xray'] as LineId[]).map(lineId => {
+            {(['xray', 'qlab', 'smt4'] as LineId[]).map(lineId => {
               const lineOrders = sidebarByLine(lineId);
               if (lineOrders.length === 0) return null;
               const lineName = lineConfigs.find(l => l.id === lineId)?.name ?? lineId;

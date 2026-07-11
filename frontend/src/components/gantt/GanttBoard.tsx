@@ -15,9 +15,9 @@ interface Props {
 }
 
 const LINES: { id: LineId; label: string }[] = [
-  { id: 'smt4', label: 'SMT4' },
-  { id: 'qlab', label: 'QLab' },
   { id: 'xray', label: 'X-ray' },
+  { id: 'qlab', label: 'QLab' },
+  { id: 'smt4', label: 'SMT4' },
 ];
 
 const LABEL_W = 110;
@@ -163,12 +163,13 @@ export default function GanttBoard({
       lassoStartRef.current = null;
       setLasso(null);
       if (!start || !rowsRef.current || !scrollRef.current) return;
-      const rowsRect = rowsRef.current.getBoundingClientRect();
+      const containerLeft = scrollRef.current.getBoundingClientRect().left;
+      const rowsTop = rowsRef.current.getBoundingClientRect().top;
       const sl = scrollRef.current.scrollLeft;
-      const lx1 = Math.min(ev.clientX, start.clientX) - rowsRect.left + sl;
-      const lx2 = Math.max(ev.clientX, start.clientX) - rowsRect.left + sl;
-      const ly1 = Math.min(ev.clientY, start.clientY) - rowsRect.top;
-      const ly2 = Math.max(ev.clientY, start.clientY) - rowsRect.top;
+      const lx1 = Math.min(ev.clientX, start.clientX) - containerLeft + sl;
+      const lx2 = Math.max(ev.clientX, start.clientX) - containerLeft + sl;
+      const ly1 = Math.min(ev.clientY, start.clientY) - rowsTop;
+      const ly2 = Math.max(ev.clientY, start.clientY) - rowsTop;
       if (lx2 - lx1 < 4 && ly2 - ly1 < 4) return;
       const newSelected = new Set<string>();
       orders.forEach(order => {
