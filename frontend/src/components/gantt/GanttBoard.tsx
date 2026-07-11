@@ -191,20 +191,9 @@ export default function GanttBoard({
       const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
       const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
-      // Update DOM directly — no React re-render during zoom
-      const newTotalWidth = TIMELINE_HOURS * newPph;
-      if (contentRef.current) {
-        contentRef.current.style.width = newTotalWidth + 'px';
-        contentRef.current.style.minWidth = newTotalWidth + 'px';
-      }
       if (scrollRef.current) scrollRef.current.scrollLeft = newScrollLeft;
       zoomTarget.current = { scrollLeft: newScrollLeft, pph: newPph };
-      // Commit to React state only when zoom stops
-      if (zoomSettleTimer.current) clearTimeout(zoomSettleTimer.current);
-      zoomSettleTimer.current = setTimeout(() => {
-        zoomSettleTimer.current = null;
-        setPph(pphRef.current);
-      }, 150);
+      setPph(newPph);
     });
   }, []);
 
@@ -578,7 +567,7 @@ export default function GanttBoard({
                           outlineOffset: isSelected ? '-2px' : undefined,
                           boxShadow: isSliding ? `0 8px 24px ${order.color}66` : undefined,
                           zIndex: isSliding ? 30 : (order.closed ? 1 : 10),
-                          transition: isSliding ? 'none' : undefined,
+                          transition: isSliding ? 'none' : 'left 0.12s ease-out, width 0.12s ease-out',
                         }}>
                         {si > 0 && (
                           <span className="absolute left-0 top-0 bottom-0 w-1 opacity-60" style={{ background: 'repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,0.3) 3px,rgba(0,0,0,0.3) 6px)' }} />
