@@ -34,3 +34,13 @@ model LineConfig {
   name             String
   cycleTimeSeconds Float
 }
+
+model Blocker {
+  id        String   @id @default(uuid())
+  lineId    String?
+  startTime DateTime
+  endTime   DateTime
+  label     String
+  color     String   @default("#ef4444")
+  createdAt DateTime @default(now())
+}
