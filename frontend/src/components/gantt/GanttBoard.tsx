@@ -416,10 +416,7 @@ export default function GanttBoard({
       startBlockerDraw(e.clientX, e.clientY);
       return;
     }
-    if (selectedIdsRef.current.size > 0) {
-      onSelectionChange(new Set());
-      return;
-    }
+    if (selectedIdsRef.current.size > 0) onSelectionChange(new Set());
     if (mode === 'pan') startPan(e.clientX);
     else startLasso(e.clientX, e.clientY);
   }, [mode, startPan, startLasso, startBlockerDraw, onSelectionChange]);
