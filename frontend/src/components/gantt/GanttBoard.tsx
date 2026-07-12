@@ -409,7 +409,8 @@ export default function GanttBoard({
   const onRowsMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    if (target.closest('[data-order-block]') || target.closest('[data-blocker]')) return;
+    if (target.closest('[data-order-block]')) return;
+    if (target.closest('[data-blocker]') && isEditMode) return;
     e.preventDefault();
     if (mode === 'blocker') {
       startBlockerDraw(e.clientX, e.clientY);
