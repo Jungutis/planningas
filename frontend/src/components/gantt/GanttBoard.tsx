@@ -117,6 +117,7 @@ export default function GanttBoard({
   const [slidingId, setSlidingId] = useState<string | null>(null);
   const [slidingLeft, setSlidingLeft] = useState(0);
   const [connectMousePos, setConnectMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [weekInView, setWeekInView] = useState(true);
 
   const timelineStart = useRef(getTimelineStart()).current;
   const timelineStartMs = timelineStart.getTime();
@@ -148,6 +149,24 @@ export default function GanttBoard({
     const tick = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(tick);
   }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const getWeekLeft = () => {
+      const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(22, 0, 0, 0);
+      if (Date.now() < ws.getTime()) ws.setDate(ws.getDate() - 7);
+      return (ws.getTime() - timelineStartMs) / 3600000 * pphRef.current;
+    };
+    const check = () => {
+      const wl = getWeekLeft();
+      const wr = wl + 7 * 24 * pphRef.current;
+      setWeekInView(wl < el.scrollLeft + el.clientWidth && wr > el.scrollLeft);
+    };
+    check();
+    el.addEventListener('scroll', check);
+    return () => el.removeEventListener('scroll', check);
+  }, [timelineStartMs, pph]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -541,7 +560,7 @@ export default function GanttBoard({
   const rowCursor = mode === 'pan' ? 'grab' : mode === 'blocker' ? 'crosshair' : 'crosshair';
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full relative">
       {/* Label column */}
       <div className="shrink-0 bg-gray-900 border-r border-gray-700 z-10" style={{ width: LABEL_W }}>
         <div className="border-b border-gray-700 flex items-end justify-end px-2 pb-1" style={{ height: HEADER_H }}>
@@ -816,6 +835,23 @@ export default function GanttBoard({
           <span className="text-xs text-blue-300 font-semibold">Click an X-ray order to link</span>
           <span className="text-xs text-blue-500">ESC to cancel</span>
         </div>
+      )}
+
+      {/* Back to current week button */}
+      {!weekInView && (
+        <button
+          onClick={() => {
+            const el = scrollRef.current;
+            if (!el) return;
+            const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(22, 0, 0, 0);
+            if (Date.now() < ws.getTime()) ws.setDate(ws.getDate() - 7);
+            const wl = (ws.getTime() - timelineStartMs) / 3600000 * pphRef.current;
+            el.scrollLeft = Math.max(0, wl - el.clientWidth / 4);
+          }}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium shadow-lg transition-colors"
+        >
+          ⟵ Current week
+        </button>
       )}
 
       {/* Lasso overlay */}
