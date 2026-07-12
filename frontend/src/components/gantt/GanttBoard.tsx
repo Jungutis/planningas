@@ -18,6 +18,7 @@ interface Props {
   onBlockerEdit: (blocker: Blocker) => void;
   onConnectToXray?: (xrayId: string) => void;
   onCancelConnect?: () => void;
+  onDblClickLine?: (lineId: LineId) => void;
 }
 
 const LINES: { id: LineId; label: string }[] = [
@@ -107,7 +108,7 @@ export default function GanttBoard({
   orders, lineConfigs, blockers, selectedIds, mode, isEditMode,
   connectingFromId,
   onUpdateOrder, onOrderDoubleClick, onSelectionChange,
-  onBlockerDraw, onBlockerEdit, onConnectToXray, onCancelConnect,
+  onBlockerDraw, onBlockerEdit, onConnectToXray, onCancelConnect, onDblClickLine,
 }: Props) {
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
@@ -188,7 +189,7 @@ export default function GanttBoard({
       const z = pendingZoom.current;
       if (!z) return;
       pendingZoom.current = null;
-      const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
+      const newPph = Math.min(400, Math.max(2, pphRef.current * z.factor));
       const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
 
@@ -553,7 +554,7 @@ export default function GanttBoard({
         {LINES.map(line => {
           const lc = lineConfig(line.id);
           return (
-            <div key={line.id} className="flex items-center px-3 border-b border-gray-700 text-sm font-semibold text-gray-200" style={{ height: ROW_H }}>
+            <div key={line.id} className="flex items-center px-3 border-b border-gray-700 text-sm font-semibold text-gray-200 select-none" style={{ height: ROW_H, cursor: onDblClickLine ? 'pointer' : 'default' }} onDoubleClick={() => onDblClickLine?.(line.id)}>
               <span className="w-2 h-2 rounded-full mr-2 shrink-0" style={{
                 backgroundColor: lc.cycleTimeSeconds < 35 ? '#22c55e' : lc.cycleTimeSeconds < 50 ? '#eab308' : '#ef4444',
               }} />
@@ -585,6 +586,15 @@ export default function GanttBoard({
 
           {/* Rows */}
           <div ref={rowsRef} className="relative select-none" style={{ cursor: rowCursor }} onMouseDown={onRowsMouseDown}>
+            {/* Current week highlight */}
+            {(() => {
+              const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(22, 0, 0, 0);
+              if (now < ws) ws.setDate(ws.getDate() - 7);
+              const left = (ws.getTime() - timelineStartMs) / 3600000 * pph;
+              const width = 7 * 24 * pph;
+              if (left + width < 0 || left > totalWidth) return null;
+              return <div className="absolute top-0 pointer-events-none" style={{ left, width, height: LINES.length * ROW_H, backgroundColor: 'rgba(99,102,241,0.04)', borderLeft: '1px solid rgba(99,102,241,0.2)', borderRight: '1px solid rgba(99,102,241,0.2)', zIndex: 0 }} />;
+            })()}
             {LINES.map((line, lineIndex) => {
               const lc = lineConfig(line.id);
               const lineOrders = orders.filter(o => o.lineId === line.id && o.startTime);
@@ -612,7 +622,7 @@ export default function GanttBoard({
                     if (bLeft + bWidth < 0 || bLeft > totalWidth) return null;
                     return (
                       <div key={b.id} data-blocker="true" data-blocker-id={b.id}
-                        onMouseDown={e => e.stopPropagation()}
+                        onMouseDown={e => { if (isEditMode) e.stopPropagation(); }}
                         className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}`, zIndex: isEditMode ? 20 : 10 }}>
                         <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
