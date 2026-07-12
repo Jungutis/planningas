@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { PlanningOrder, LineConfig, LineId, Blocker } from '../../types';
 
 export type BoardMode = 'pan' | 'select' | 'blocker';
@@ -858,10 +859,10 @@ export default function GanttBoard({
         </button>
       )}
 
-      {/* Lasso overlay */}
-      {lasso && (
-        <div className="fixed pointer-events-none z-50 border border-blue-400 bg-blue-400/10"
-          style={{ left: lasso.x1, top: lasso.y1, width: lasso.x2 - lasso.x1, height: lasso.y2 - lasso.y1 }} />
+      {/* Lasso overlay — portal to escape overflow:hidden parents */}
+      {lasso && createPortal(
+        <div className="pointer-events-none" style={{ position: 'fixed', zIndex: 9999, left: lasso.x1, top: lasso.y1, width: lasso.x2 - lasso.x1, height: lasso.y2 - lasso.y1, border: '1px solid #60a5fa', backgroundColor: 'rgba(96,165,250,0.08)' }} />,
+        document.body
       )}
 
     </div>
