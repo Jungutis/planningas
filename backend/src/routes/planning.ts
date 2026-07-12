@@ -10,7 +10,7 @@ const router = Router();
 function serializeOrder(o: {
   id: string; partNumber: string; quantity: number; color: string;
   lineId: string | null; startTime: Date | null; closed: boolean;
-  comments: unknown; scrapPercent: number; createdAt: Date;
+  comments: unknown; scrapPercent: number; createdAt: Date; relatedOrderId?: string | null;
 }): PlanningOrder {
   return {
     id: o.id,
@@ -23,6 +23,7 @@ function serializeOrder(o: {
     comments: (o.comments as PlanningComment[]) ?? [],
     scrapPercent: o.scrapPercent,
     createdAt: o.createdAt.toISOString(),
+    relatedOrderId: o.relatedOrderId ?? null,
   };
 }
 
@@ -91,6 +92,7 @@ router.patch('/orders/:id', async (req: Request, res: Response) => {
       ...(body.closed !== undefined && { closed: body.closed }),
       ...(body.scrapPercent !== undefined && { scrapPercent: body.scrapPercent }),
       ...(body.comments !== undefined && { comments: body.comments as unknown as Prisma.InputJsonValue }),
+      ...('relatedOrderId' in body && { relatedOrderId: body.relatedOrderId ?? null }),
     },
   });
   const order = serializeOrder(updated);

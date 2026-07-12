@@ -1,24 +1,50 @@
 import { useState } from 'react';
-import { PlanningOrder, UserRole, ORDER_COLORS, LineConfig } from '../../types';
+import { PlanningOrder, UserRole, ORDER_COLORS, LineConfig, Blocker } from '../../types';
 
 interface Props {
   order: PlanningOrder;
   userRole: UserRole;
   lineConfig?: LineConfig;
   isEditMode: boolean;
+  orders?: PlanningOrder[];
+  blockers?: Blocker[];
   onClose: () => void;
   onUpdate: (updated: PlanningOrder) => void;
   onDelete: (id: string) => void;
+  onStartConnect?: (qlabOrderId: string) => void;
+  onRemoveConnect?: (qlabOrderId: string) => void;
 }
 
 const ROLE_LABEL: Record<UserRole, string> = { Q: 'Quality', LOG: 'Logistics', PROD: 'Production' };
+
 
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export default function OrderModal({ order, userRole, lineConfig, isEditMode, onClose, onUpdate, onDelete }: Props) {
+function getActualEndMs(order: PlanningOrder, blockers: Blocker[], lc: LineConfig): number {
+  if (!order.startTime) return 0;
+  const startMs = new Date(order.startTime).getTime();
+  const durMs = order.quantity * lc.cycleTimeSeconds * 1000;
+
+  const rel = blockers
+    .filter(b => b.lineId === null || b.lineId === order.lineId)
+    .map(b => ({ s: new Date(b.startTime).getTime(), e: new Date(b.endTime).getTime() }))
+    .filter(b => b.s < startMs + durMs * 3 && b.e > startMs)
+    .sort((a, b) => a.s - b.s);
+
+  let cur = startMs;
+  let rem = durMs;
+  for (const b of rel) {
+    if (rem <= 0) break;
+    if (b.s > cur) { const d = Math.min(b.s - cur, rem); rem -= d; cur = b.s; }
+    if (b.e > cur) cur = b.e;
+  }
+  return cur + rem;
+}
+
+export default function OrderModal({ order, userRole, lineConfig, isEditMode, orders = [], blockers = [], onClose, onUpdate, onDelete, onStartConnect, onRemoveConnect }: Props) {
   const [scrapPercent, setScrapPercent] = useState(order.scrapPercent);
   const [color, setColor] = useState(order.color);
   const [commentText, setCommentText] = useState('');
@@ -29,9 +55,27 @@ export default function OrderModal({ order, userRole, lineConfig, isEditMode, on
   const canClose = userRole === 'LOG' || (userRole === 'PROD' && order.lineId === 'qlab');
   const canDelete = isEditMode && userRole === 'LOG';
 
-  const endTime = order.startTime && lineConfig
-    ? new Date(new Date(order.startTime).getTime() + order.quantity * lineConfig.cycleTimeSeconds * 1000).toISOString()
+  const actualEndMs = order.startTime && lineConfig ? getActualEndMs(order, blockers, lineConfig) : null;
+  const simpleEndMs = order.startTime && lineConfig
+    ? new Date(order.startTime).getTime() + order.quantity * lineConfig.cycleTimeSeconds * 1000
     : null;
+  const blockerDelayMs = actualEndMs && simpleEndMs ? actualEndMs - simpleEndMs : 0;
+  const hasBlockerDelay = blockerDelayMs > 60000; // >1 min
+
+  // QLab → X-ray flow
+  const isQlab = order.lineId === 'qlab';
+  const isXray = order.lineId === 'xray';
+  const goodPcs = Math.round(order.quantity * (1 - scrapPercent / 100));
+  // For X-ray: find QLab orders linked to this order via relatedOrderId
+  const linkedQlabOrders = isXray
+    ? orders.filter(o => o.lineId === 'qlab' && o.relatedOrderId === order.id && !o.closed)
+    : [];
+
+  // Relation
+  const relatedXrayOrder = isQlab && order.relatedOrderId
+    ? orders.find(o => o.id === order.relatedOrderId)
+    : null;
+  const canManageRelation = isQlab && (userRole === 'LOG' || userRole === 'Q');
 
   const save = () => {
     onUpdate({ ...order, scrapPercent, color });
@@ -90,21 +134,92 @@ export default function OrderModal({ order, userRole, lineConfig, isEditMode, on
               <p className="text-white text-xs font-medium">{fmtDate(order.startTime)}</p>
             </div>
             <div className="bg-gray-800 rounded-lg p-3">
-              <p className="text-xs text-gray-400 mb-1">End</p>
-              <p className="text-white text-xs font-medium">{fmtDate(endTime)}</p>
+              <p className="text-xs text-gray-400 mb-1">End {hasBlockerDelay ? <span className="text-amber-400">(+blocker)</span> : ''}</p>
+              <p className="text-white text-xs font-medium">{fmtDate(actualEndMs ? new Date(actualEndMs).toISOString() : null)}</p>
+              {hasBlockerDelay && (
+                <p className="text-xs text-amber-400 mt-0.5">+{Math.round(blockerDelayMs / 3600000 * 10) / 10}h blocker delay</p>
+              )}
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Scrap %</label>
-            <input type="number" min="0" max="100" step="0.1"
-              value={scrapPercent} onChange={e => setScrapPercent(Number(e.target.value))}
-              disabled={!canEditScrap}
-              className="w-28 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 disabled:opacity-50" />
-            {order.scrapPercent > 0 && (
-              <span className="ml-3 text-sm text-amber-400">{order.scrapPercent}% scrap · {Math.round(order.quantity * (1 - order.scrapPercent / 100))} good pcs</span>
-            )}
-          </div>
+          {/* QLab scrap → X-ray flow */}
+          {isQlab && (
+            <div className="bg-gray-800 rounded-lg p-3 space-y-2">
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide">QLab → X-ray flow</p>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-300">{order.quantity} pcs</span>
+                <span className="text-gray-600">→</span>
+                <span className="text-amber-400">{scrapPercent}% scrap</span>
+                <span className="text-gray-600">→</span>
+                <span className="text-green-400 font-semibold">{goodPcs} good pcs</span>
+              </div>
+              {/* X-ray relation */}
+              {relatedXrayOrder ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-1.5 flex-1 bg-gray-700 rounded px-2 py-1.5">
+                    <span className="text-xs text-gray-400">→ X-ray:</span>
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: relatedXrayOrder.color }} />
+                    <span className="text-xs text-white font-mono">{relatedXrayOrder.partNumber}</span>
+                    <span className="text-xs text-gray-400">· {goodPcs} good pcs</span>
+                  </div>
+                  {canManageRelation && (
+                    <button onClick={() => { onRemoveConnect?.(order.id); onClose(); }}
+                      className="text-xs text-gray-500 hover:text-red-400 px-2 py-1.5 rounded border border-gray-600 hover:border-red-800 transition-colors shrink-0">
+                      Unlink
+                    </button>
+                  )}
+                </div>
+              ) : (
+                canManageRelation && (
+                  <button onClick={() => { onStartConnect?.(order.id); onClose(); }}
+                    className="flex items-center gap-1.5 w-full px-3 py-1.5 rounded border border-dashed border-gray-600 text-xs text-gray-400 hover:border-blue-500 hover:text-blue-400 transition-colors">
+                    <span>⟶</span> Link to X-ray order
+                  </button>
+                )
+              )}
+            </div>
+          )}
+
+          {/* X-ray: show linked QLab info */}
+          {isXray && linkedQlabOrders.length > 0 && (
+            <div className="bg-gray-800 rounded-lg p-3 space-y-1">
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide">Input from QLab</p>
+              {linkedQlabOrders.map(qo => {
+                const qGoodPcs = Math.round(qo.quantity * (1 - qo.scrapPercent / 100));
+                const goodRatio = Math.min(1, qGoodPcs / order.quantity);
+                return (
+                  <div key={qo.id} className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm">
+                      <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: qo.color }} />
+                      <span className="text-gray-300">{qo.quantity} pcs</span>
+                      <span className="text-gray-600">·</span>
+                      <span className="text-amber-400">{qo.scrapPercent}% scrap</span>
+                      <span className="text-gray-600">→</span>
+                      <span className="text-green-400 font-semibold">{qGoodPcs} good pcs</span>
+                    </div>
+                    <div className="h-1.5 rounded-full overflow-hidden bg-gray-600">
+                      <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${goodRatio * 100}%` }} />
+                    </div>
+                    <p className="text-xs text-gray-500">{Math.round(goodRatio * 100)}% of X-ray order covered by good pcs</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Scrap % — only for QLab */}
+          {isQlab && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Scrap %</label>
+              <input type="number" min="0" max="100" step="0.1"
+                value={scrapPercent} onChange={e => setScrapPercent(Number(e.target.value))}
+                disabled={!canEditScrap}
+                className="w-28 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 disabled:opacity-50" />
+              {scrapPercent > 0 && (
+                <span className="ml-3 text-sm text-amber-400">{scrapPercent}% scrap · {goodPcs} good pcs</span>
+              )}
+            </div>
+          )}
 
           {canEditColor && (
             <div>

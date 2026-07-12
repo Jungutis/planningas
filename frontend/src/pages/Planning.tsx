@@ -45,12 +45,16 @@ export default function Planning() {
   const [pendingBlockerDraw, setPendingBlockerDraw] = useState<{ lineId: LineId; startTime: string; endTime: string } | null>(null);
   // Blocker edit
   const [editingBlocker, setEditingBlocker] = useState<Blocker | null>(null);
+  // QLab→X-ray relation connecting mode
+  const [connectingFromId, setConnectingFromId] = useState<string | null>(null);
 
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
   const lineConfigsRef = useRef(lineConfigs);
   lineConfigsRef.current = lineConfigs;
   const editSnapshot = useRef<{ orders: PlanningOrder[]; lineConfigs: LineConfig[] } | null>(null);
+  const deletedInEditRef = useRef<Set<string>>(new Set());
+  const isEditModeRef = useRef(false);
 
   const handleToggleEdit = useCallback(() => {
     if (!editMode) {
@@ -58,44 +62,57 @@ export default function Planning() {
         orders: JSON.parse(JSON.stringify(ordersRef.current)),
         lineConfigs: JSON.parse(JSON.stringify(lineConfigsRef.current)),
       };
+      deletedInEditRef.current = new Set();
       setEditMode(true);
     } else {
+      // Done — send all buffered changes to server so all clients see them
+      const snap = editSnapshot.current;
       editSnapshot.current = null;
       setEditMode(false);
       setBoardMode('pan');
       setSelectedIds(new Set());
+
+      if (snap) {
+        const currentOrders = ordersRef.current;
+        currentOrders.forEach(order => {
+          const orig = snap.orders.find(s => s.id === order.id);
+          if (!orig) return; // new order already POSTed
+          const changed =
+            order.startTime !== orig.startTime ||
+            order.lineId !== orig.lineId ||
+            order.relatedOrderId !== orig.relatedOrderId ||
+            order.scrapPercent !== orig.scrapPercent ||
+            order.color !== orig.color ||
+            order.closed !== orig.closed;
+          if (changed) void apiPatch(`/orders/${order.id}`, order);
+        });
+        lineConfigsRef.current.forEach(lc => {
+          const orig = snap.lineConfigs.find(l => l.id === lc.id);
+          if (orig && lc.cycleTimeSeconds !== orig.cycleTimeSeconds)
+            void apiPatch(`/lines/${lc.id}`, { cycleTimeSeconds: lc.cycleTimeSeconds });
+        });
+        deletedInEditRef.current.forEach(id => void apiDelete(`/orders/${id}`));
+      }
+      deletedInEditRef.current = new Set();
     }
   }, [editMode]);
 
-  const handleCancelEdit = useCallback(async () => {
+  const handleCancelEdit = useCallback(() => {
     const snap = editSnapshot.current;
     editSnapshot.current = null;
+    deletedInEditRef.current = new Set();
     setEditMode(false);
     setBoardMode('pan');
     setSelectedIds(new Set());
-    if (!snap) return;
-
-    setOrders(snap.orders);
-    setLineConfigs(snap.lineConfigs);
-
-    const current = ordersRef.current;
-    await Promise.all(
-      snap.orders
-        .filter(so => {
-          const co = current.find(o => o.id === so.id);
-          return co && (co.startTime !== so.startTime || co.lineId !== so.lineId);
-        })
-        .map(so => apiPatch(`/orders/${so.id}`, { startTime: so.startTime, lineId: so.lineId }))
-    );
-    await Promise.all(
-      snap.lineConfigs
-        .filter(sl => {
-          const cl = lineConfigsRef.current.find(l => l.id === sl.id);
-          return cl && cl.cycleTimeSeconds !== sl.cycleTimeSeconds;
-        })
-        .map(sl => apiPatch(`/lines/${sl.id}`, { cycleTimeSeconds: sl.cycleTimeSeconds }))
-    );
+    // Restore local state from snapshot — no API calls
+    if (snap) {
+      setOrders(snap.orders);
+      setLineConfigs(snap.lineConfigs);
+    }
   }, []);
+
+  const isEditMode = editMode && userRole === 'LOG';
+  isEditModeRef.current = isEditMode;
 
   useEffect(() => {
     if (userRole !== 'LOG') { editSnapshot.current = null; setEditMode(false); }
@@ -136,13 +153,10 @@ export default function Planning() {
         const ids = selectedIds;
         if (ids.size === 0) return;
         setSelectedIds(new Set());
+        // In edit mode: only update local state, no API call (sent on Done)
         ids.forEach(id => {
           const o = ordersRef.current.find(x => x.id === id);
-          if (o?.startTime) {
-            const unplaced = { ...o, startTime: null };
-            setOrders(all => all.map(x => x.id === id ? unplaced : x));
-            void apiPatch(`/orders/${id}`, { startTime: null });
-          }
+          if (o?.startTime) setOrders(all => all.map(x => x.id === id ? { ...o, startTime: null } : x));
         });
       }
     };
@@ -152,18 +166,27 @@ export default function Planning() {
 
   const handleUpdateOrder = useCallback(async (updated: PlanningOrder) => {
     setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
-    void apiPatch(`/orders/${updated.id}`, updated);
+    // In edit mode: local-only until Done is clicked
+    if (!isEditModeRef.current) void apiPatch(`/orders/${updated.id}`, updated);
   }, []);
 
   const handleDeleteOrder = useCallback((id: string) => {
     setOrders(prev => prev.filter(o => o.id !== id));
-    void apiDelete(`/orders/${id}`);
+    if (isEditModeRef.current) {
+      deletedInEditRef.current.add(id);
+    } else {
+      void apiDelete(`/orders/${id}`);
+    }
   }, []);
 
   const handleDeleteAllClosed = useCallback(async () => {
     const closed = ordersRef.current.filter(o => o.closed);
     setOrders(prev => prev.filter(o => !o.closed));
-    await Promise.all(closed.map(o => apiDelete(`/orders/${o.id}`)));
+    if (isEditModeRef.current) {
+      closed.forEach(o => deletedInEditRef.current.add(o.id));
+    } else {
+      await Promise.all(closed.map(o => apiDelete(`/orders/${o.id}`)));
+    }
   }, []);
 
   const handleCreateOrder = useCallback(async (partNumber: string, quantity: number, color: string, lineId: LineId) => {
@@ -200,11 +223,34 @@ export default function Planning() {
     void apiDelete(`/blockers/${id}`);
   }, []);
 
+  const handleStartConnect = useCallback((qlabOrderId: string) => {
+    setModalOrder(null);
+    setConnectingFromId(qlabOrderId);
+  }, []);
+
+  const handleConnectToXray = useCallback(async (xrayId: string) => {
+    const qlabId = connectingFromId;
+    setConnectingFromId(null);
+    if (!qlabId) return;
+    const updated = ordersRef.current.find(o => o.id === qlabId);
+    if (updated) await handleUpdateOrder({ ...updated, relatedOrderId: xrayId });
+  }, [connectingFromId, handleUpdateOrder]);
+
+  const handleCancelConnect = useCallback(() => {
+    setConnectingFromId(null);
+  }, []);
+
+  const handleRemoveConnect = useCallback(async (qlabOrderId: string) => {
+    const updated = ordersRef.current.find(o => o.id === qlabOrderId);
+    if (updated) await handleUpdateOrder({ ...updated, relatedOrderId: null });
+  }, [handleUpdateOrder]);
+
   const handleCycleTimeChange = (id: string, pcsPerHour: number) => {
     if (pcsPerHour <= 0) return;
     const secs = 3600 / pcsPerHour;
     setLineConfigs(prev => prev.map(l => l.id === id ? { ...l, cycleTimeSeconds: secs } : l));
-    void apiPatch(`/lines/${id}`, { cycleTimeSeconds: secs });
+    // In edit mode: local-only until Done is clicked
+    if (!isEditMode) void apiPatch(`/lines/${id}`, { cycleTimeSeconds: secs });
   };
 
   const sidebarOrders = (lineId: LineId) => orders.filter(o => o.lineId === lineId && !o.startTime && !o.closed);
@@ -220,8 +266,6 @@ export default function Planning() {
     if (!order || !order.startTime) return;
     handleUpdateOrder({ ...order, startTime: null });
   };
-
-  const isEditMode = editMode && userRole === 'LOG';
 
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-white select-none overflow-hidden">
@@ -413,11 +457,14 @@ export default function Planning() {
               selectedIds={selectedIds}
               mode={boardMode}
               isEditMode={isEditMode}
+              connectingFromId={connectingFromId}
               onUpdateOrder={handleUpdateOrder}
               onOrderDoubleClick={setModalOrder}
               onSelectionChange={setSelectedIds}
               onBlockerDraw={handleBlockerDraw}
               onBlockerEdit={handleBlockerEdit}
+              onConnectToXray={handleConnectToXray}
+              onCancelConnect={handleCancelConnect}
             />
           </div>
         </div>
@@ -465,9 +512,13 @@ export default function Planning() {
           userRole={userRole}
           lineConfig={lineConfigs.find(l => l.id === modalOrder.lineId)}
           isEditMode={isEditMode}
+          orders={orders}
+          blockers={blockers}
           onClose={() => setModalOrder(null)}
           onUpdate={o => { handleUpdateOrder(o); setModalOrder(o); }}
           onDelete={handleDeleteOrder}
+          onStartConnect={handleStartConnect}
+          onRemoveConnect={handleRemoveConnect}
         />
       )}
     </div>

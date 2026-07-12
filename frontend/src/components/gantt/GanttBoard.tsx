@@ -10,11 +10,14 @@ interface Props {
   selectedIds: Set<string>;
   mode: BoardMode;
   isEditMode: boolean;
+  connectingFromId?: string | null;
   onUpdateOrder: (order: PlanningOrder) => void;
   onOrderDoubleClick: (order: PlanningOrder) => void;
   onSelectionChange: (ids: Set<string>) => void;
   onBlockerDraw: (lineId: LineId, startTime: string, endTime: string) => void;
   onBlockerEdit: (blocker: Blocker) => void;
+  onConnectToXray?: (xrayId: string) => void;
+  onCancelConnect?: () => void;
 }
 
 const LINES: { id: LineId; label: string }[] = [
@@ -102,16 +105,17 @@ interface DrawingBlocker { lineId: LineId; lineIndex: number; startPx: number; c
 
 export default function GanttBoard({
   orders, lineConfigs, blockers, selectedIds, mode, isEditMode,
+  connectingFromId,
   onUpdateOrder, onOrderDoubleClick, onSelectionChange,
-  onBlockerDraw, onBlockerEdit,
+  onBlockerDraw, onBlockerEdit, onConnectToXray, onCancelConnect,
 }: Props) {
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
   const [lasso, setLasso] = useState<LassoRect | null>(null);
   const [drawingBlocker, setDrawingBlocker] = useState<DrawingBlocker | null>(null);
-  const [debugInfo, setDebugInfo] = useState<{ pph: number; scrollLeft: number; timeAtMouse: number; effectiveScrollLeft: number; tick: string } | null>(null);
   const [slidingId, setSlidingId] = useState<string | null>(null);
   const [slidingLeft, setSlidingLeft] = useState(0);
+  const [connectMousePos, setConnectMousePos] = useState<{ x: number; y: number } | null>(null);
 
   const timelineStart = useRef(getTimelineStart()).current;
   const timelineStartMs = timelineStart.getTime();
@@ -123,6 +127,8 @@ export default function GanttBoard({
   const panStartRef = useRef({ x: 0, scrollLeft: 0 });
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pphRef = useRef(pph);
+  const renderedPphRef = useRef(pph);
+  const zoomSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
   const ordersRef = useRef(orders);
@@ -151,6 +157,10 @@ export default function GanttBoard({
   }, []);
 
   useLayoutEffect(() => {
+    renderedPphRef.current = pph;
+    if (rowsRef.current) rowsRef.current.style.transform = '';
+    if (headerRef.current) headerRef.current.style.transform = '';
+    if (contentRef.current) contentRef.current.style.removeProperty('--zoom-inv');
     const t = zoomTarget.current;
     if (t && t.pph === pph && scrollRef.current) {
       zoomTarget.current = null;
@@ -171,15 +181,6 @@ export default function GanttBoard({
     } else {
       const timeAtMouse = (el.scrollLeft + mouseOffsetX) / pphRef.current;
       pendingZoom.current = { factor, timeAtMouse, mouseOffsetX };
-      setDebugInfo({
-        pph: pphRef.current,
-        scrollLeft: el.scrollLeft,
-        timeAtMouse,
-        effectiveScrollLeft: el.scrollLeft,
-        tick: getTickIntervalHours(pphRef.current) >= 1
-          ? `${getTickIntervalHours(pphRef.current)}h`
-          : `${Math.round(getTickIntervalHours(pphRef.current) * 60)}min`,
-      });
     }
 
     cancelAnimationFrame(zoomRafId.current);
@@ -190,9 +191,32 @@ export default function GanttBoard({
       const newPph = Math.min(400, Math.max(0.3, pphRef.current * z.factor));
       const newScrollLeft = Math.max(0, z.timeAtMouse * newPph - z.mouseOffsetX);
       pphRef.current = newPph;
+
+      // GPU transform — no React re-render each frame
+      const s = newPph / renderedPphRef.current;
+      if (rowsRef.current) {
+        rowsRef.current.style.transform = `scaleX(${s})`;
+        rowsRef.current.style.transformOrigin = '0 0';
+      }
+      if (headerRef.current) {
+        headerRef.current.style.transform = `scaleX(${s})`;
+        headerRef.current.style.transformOrigin = '0 0';
+      }
+      if (contentRef.current) {
+        const w = TIMELINE_HOURS * newPph + 'px';
+        contentRef.current.style.width = w;
+        contentRef.current.style.minWidth = w;
+        contentRef.current.style.setProperty('--zoom-inv', String(1 / s));
+      }
       if (scrollRef.current) scrollRef.current.scrollLeft = newScrollLeft;
       zoomTarget.current = { scrollLeft: newScrollLeft, pph: newPph };
-      setPph(newPph);
+
+      // Commit to React only when zoom settles
+      if (zoomSettleTimer.current) clearTimeout(zoomSettleTimer.current);
+      zoomSettleTimer.current = setTimeout(() => {
+        zoomSettleTimer.current = null;
+        setPph(pphRef.current);
+      }, 150);
     });
   }, []);
 
@@ -208,6 +232,12 @@ export default function GanttBoard({
   isEditModeRef.current = isEditMode;
   const onBlockerEditRef = useRef(onBlockerEdit);
   onBlockerEditRef.current = onBlockerEdit;
+  const connectingFromIdRef = useRef(connectingFromId);
+  connectingFromIdRef.current = connectingFromId;
+  const onConnectToXrayRef = useRef(onConnectToXray);
+  onConnectToXrayRef.current = onConnectToXray;
+  const onCancelConnectRef = useRef(onCancelConnect);
+  onCancelConnectRef.current = onCancelConnect;
   useEffect(() => {
     const el = rowsRef.current;
     if (!el) return;
@@ -222,6 +252,29 @@ export default function GanttBoard({
     el.addEventListener('click', handler);
     return () => el.removeEventListener('click', handler);
   }, []);
+
+  // Connecting mode: track mouse position + ESC to cancel
+  useEffect(() => {
+    if (!connectingFromId) { setConnectMousePos(null); return; }
+    const onMove = (e: MouseEvent) => {
+      const el = scrollRef.current;
+      const rows = rowsRef.current;
+      if (!el || !rows) return;
+      const scale = pphRef.current / renderedPphRef.current;
+      const elBounds = el.getBoundingClientRect();
+      const rowsBounds = rows.getBoundingClientRect();
+      setConnectMousePos({
+        x: (e.clientX - elBounds.left + el.scrollLeft) / scale,
+        y: e.clientY - rowsBounds.top,
+      });
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancelConnectRef.current?.();
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('keydown', onKey); };
+  }, [connectingFromId]);
 
   // Pan with momentum
   const startPan = useCallback((clientX: number) => {
@@ -391,22 +444,48 @@ export default function GanttBoard({
       const startX = e.clientX;
       let moved = false;
 
+      const lc = lineConfigs.find(l => l.id === order.lineId) ?? lineConfigs[0];
+      const orderWidth = (getDurationMs(order, lc) / 3600000) * pph;
+
+      const clampToCollision = (rawLeft: number): number => {
+        let clamped = Math.max(0, rawLeft);
+        for (const o of ordersRef.current) {
+          if (o.id === order.id || o.lineId !== order.lineId || !o.startTime || o.closed) continue;
+          const olc = lineConfigs.find(l => l.id === o.lineId) ?? lineConfigs[0];
+          const oLeft = ((new Date(o.startTime).getTime() - timelineStartMs) / 3600000) * pph;
+          const oWidth = (getDurationMs(o, olc) / 3600000) * pph;
+          if (clamped + orderWidth > oLeft && clamped < oLeft + oWidth) {
+            // Use original baseLeft for direction — not rawLeft — so dragging past
+            // the blocker still clamps to the same side (no jumping through)
+            clamped = baseLeft < oLeft ? oLeft - orderWidth : oLeft + oWidth;
+          }
+        }
+        return Math.max(0, clamped);
+      };
+
       const onMove = (ev: MouseEvent) => {
         if (!canSlide) return;
         const delta = ev.clientX - startX;
         if (!moved && Math.abs(delta) < 5) return;
         moved = true;
         setSlidingId(order.id);
-        setSlidingLeft(Math.max(0, baseLeft + delta));
+        setSlidingLeft(clampToCollision(baseLeft + delta));
       };
 
       const onUp = (ev: MouseEvent) => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+        if (!moved && connectingFromIdRef.current && order.lineId === 'xray') {
+          onConnectToXrayRef.current?.(order.id);
+          return;
+        }
         if (moved && canSlide) {
-          const newLeft = Math.max(0, baseLeft + (ev.clientX - startX));
+          const clampedLeft = clampToCollision(baseLeft + (ev.clientX - startX));
           setSlidingId(null);
-          onUpdateOrder({ ...order, startTime: xToTime(newLeft).toISOString() });
+          onUpdateOrder({ ...order, startTime: xToTime(clampedLeft).toISOString() });
+          const newSel = new Set(selectedIdsRef.current);
+          newSel.delete(order.id);
+          onSelectionChange(newSel);
         } else {
           setSlidingId(null);
           if (clickTimerRef.current) {
@@ -491,9 +570,12 @@ export default function GanttBoard({
           {/* Header */}
           <div ref={headerRef} className="bg-gray-950 border-b border-gray-700 relative overflow-hidden select-none" style={{ height: HEADER_H, cursor: 'grab' }} onMouseDown={onHeaderMouseDown}>
             {ticks.map((tick, i) => (
-              <div key={i} className="absolute top-0 bottom-0 flex flex-col justify-end pb-1 pl-1" style={{ left: tick.x }}>
+              <div key={i} className="absolute top-0 bottom-0" style={{ left: tick.x }}>
                 <div className={`absolute top-0 bottom-0 border-l ${tick.isMajor ? 'border-gray-400' : 'border-gray-700'}`} />
-                <span className={`text-xs whitespace-nowrap relative z-10 ${tick.isMajor ? 'text-gray-300 font-semibold' : 'text-gray-500'}`}>{tick.label}</span>
+                <span
+                  className={`absolute bottom-1 text-xs whitespace-nowrap ${tick.isMajor ? 'text-gray-300 font-semibold' : 'text-gray-500'}`}
+                  style={{ left: 0, display: 'inline-block', transform: 'translateX(-50%) scaleX(var(--zoom-inv, 1))', transformOrigin: 'center bottom' }}
+                >{tick.label}</span>
               </div>
             ))}
             {redLineX >= 0 && redLineX <= totalWidth && (
@@ -549,31 +631,53 @@ export default function GanttBoard({
                     if (!isSliding && segs.every(s => s.left + s.width < 0 || s.left > totalWidth)) return null;
                     const isSelected = selectedIds.has(order.id);
                     const canSlide = isEditMode && !order.closed;
+                    const isConnectTarget = connectingFromId && order.lineId === 'xray';
+
+                    // X-ray order: find linked QLab to compute scrap overlay
+                    const linkedQlab = line.id === 'xray'
+                      ? orders.find(o => o.lineId === 'qlab' && o.relatedOrderId === order.id)
+                      : null;
+                    const scrapRatio = linkedQlab
+                      ? Math.max(0, Math.min(1, 1 - Math.round(linkedQlab.quantity * (1 - linkedQlab.scrapPercent / 100)) / order.quantity))
+                      : 0;
 
                     return segs.map((seg, si) => (
                       <div key={`${order.id}-${si}`}
                         data-order-block="true"
                         onMouseDown={makeSlideHandler(order, baseLeft)}
-                        className="absolute top-2 rounded-md select-none flex items-center px-2 gap-1 overflow-hidden"
+                        className="absolute top-2 rounded-md select-none overflow-hidden"
                         style={{
                           left: seg.left,
                           width: seg.width,
                           height: ROW_H - 16,
-                          cursor: canSlide ? (isSliding ? 'ew-resize' : 'grab') : 'pointer',
+                          cursor: isConnectTarget ? 'crosshair' : (canSlide ? (isSliding ? 'ew-resize' : 'grab') : 'pointer'),
                           backgroundColor: order.color,
                           opacity: order.closed ? 0.5 : 1,
-                          outline: isSelected ? `2px solid white` : undefined,
-                          outlineOffset: isSelected ? '-2px' : undefined,
-                          boxShadow: isSliding ? `0 8px 24px ${order.color}66` : undefined,
-                          zIndex: isSliding ? 30 : (order.closed ? 1 : 10),
+                          outline: isConnectTarget ? `2px solid rgba(96,165,250,0.8)` : (isSelected ? `2px solid white` : undefined),
+                          outlineOffset: '-2px',
+                          boxShadow: isSliding ? `0 8px 24px ${order.color}66` : (isConnectTarget ? `0 0 12px rgba(96,165,250,0.4)` : undefined),
+                          zIndex: isSliding ? 2 : (order.closed ? 1 : 10),
                         }}>
                         {si > 0 && (
                           <span className="absolute left-0 top-0 bottom-0 w-1 opacity-60" style={{ background: 'repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,0.3) 3px,rgba(0,0,0,0.3) 6px)' }} />
                         )}
-                        {order.closed && <span className="text-xs text-white/70 shrink-0">✓</span>}
-                        {isSelected && <span className="text-xs text-white shrink-0">●</span>}
-                        <span className="text-xs font-semibold truncate text-white">{order.partNumber}</span>
-                        {seg.width > 80 && <span className="text-xs text-white/70 shrink-0 ml-auto">{order.quantity}</span>}
+                        {/* Scrap overlay for X-ray orders with linked QLab */}
+                        {scrapRatio > 0 && (
+                          <div className="absolute top-0 bottom-0 right-0 pointer-events-none rounded-r-md"
+                            style={{ width: `${scrapRatio * 100}%`, backgroundColor: 'rgba(0,0,0,0.55)' }} />
+                        )}
+                        <div className="absolute inset-0 flex items-center px-2 gap-1"
+                          style={{ transform: 'scaleX(var(--zoom-inv, 1))', transformOrigin: 'left center' }}>
+                          {order.closed && <span className="text-xs text-white/70 shrink-0">✓</span>}
+                          {isSelected && <span className="text-xs text-white shrink-0">●</span>}
+                          <span className="text-xs font-semibold truncate text-white">{order.partNumber}</span>
+                          {seg.width > 80 && <span className="text-xs text-white/70 shrink-0 ml-auto">{order.quantity}</span>}
+                          {scrapRatio > 0 && seg.width > 100 && (
+                            <span className="text-xs text-green-300/80 shrink-0" style={{ transform: 'scaleX(var(--zoom-inv,1))', transformOrigin: 'right center' }}>
+                              {Math.round((1 - scrapRatio) * 100)}%✓
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ));
                   })}
@@ -605,20 +709,106 @@ export default function GanttBoard({
 
             {/* Sliding order start line */}
             {slidingId && (() => {
+              const slidingOrder = orders.find(o => o.id === slidingId);
               const t = new Date(timelineStartMs + (slidingLeft / pph) * 3600000);
               const label = t.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
               return (
                 <div className="absolute top-0 bottom-0 pointer-events-none z-40" style={{ left: slidingLeft }}>
                   <div className="absolute top-0 bottom-0 w-px bg-white/70" />
-                  <div className="absolute -top-0 left-1 bg-gray-900/90 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-white font-mono whitespace-nowrap shadow-lg">
-                    {label}
+                  <div className="absolute top-1 left-1 bg-gray-900/90 border border-gray-600 rounded px-1.5 py-1 text-xs text-white font-mono whitespace-nowrap shadow-lg flex flex-col gap-0.5">
+                    {slidingOrder && (
+                      <span className="font-semibold" style={{ color: slidingOrder.color }}>{slidingOrder.partNumber} · {slidingOrder.quantity} pcs</span>
+                    )}
+                    <span className="text-gray-300">{label}</span>
                   </div>
                 </div>
               );
             })()}
+          {/* Relation arrows SVG — inside rowsRef so scaleX transform aligns with orders */}
+          {(() => {
+            const relations: Array<{ x1: number; y1: number; x2: number; y2: number; color: string }> = [];
+            for (const qo of orders) {
+              if (qo.lineId !== 'qlab' || !qo.relatedOrderId || !qo.startTime) continue;
+              const xo = orders.find(o => o.id === qo.relatedOrderId && o.lineId === 'xray' && o.startTime);
+              if (!xo) continue;
+              const qlc = lineConfigs.find(l => l.id === 'qlab') ?? lineConfigs[0];
+              const xlc = lineConfigs.find(l => l.id === 'xray') ?? lineConfigs[0];
+              const qLeft = ((new Date(qo.startTime).getTime() - timelineStartMs) / 3600000) * pph;
+              const qWidth = (getDurationMs(qo, qlc) / 3600000) * pph;
+              const xLeft = ((new Date(xo.startTime!).getTime() - timelineStartMs) / 3600000) * pph;
+              const xWidth = (getDurationMs(xo, xlc) / 3600000) * pph;
+              relations.push({
+                x1: qLeft + qWidth / 2, y1: ROW_H * 1.5,
+                x2: xLeft + xWidth / 2, y2: ROW_H * 0.5,
+                color: qo.color,
+              });
+            }
+            // Connecting mode: from QLab order to mouse
+            const cfId = connectingFromId;
+            const cfOrder = cfId ? orders.find(o => o.id === cfId) : null;
+            let connectLine: { x1: number; y1: number; x2: number; y2: number } | null = null;
+            if (cfOrder?.startTime && connectMousePos) {
+              const qlc = lineConfigs.find(l => l.id === 'qlab') ?? lineConfigs[0];
+              const qLeft = ((new Date(cfOrder.startTime).getTime() - timelineStartMs) / 3600000) * pph;
+              const qWidth = (getDurationMs(cfOrder, qlc) / 3600000) * pph;
+              connectLine = { x1: qLeft + qWidth / 2, y1: ROW_H * 1.5, x2: connectMousePos.x, y2: connectMousePos.y };
+            }
+            if (relations.length === 0 && !connectLine) return null;
+            const totalH = LINES.length * ROW_H;
+            return (
+              <svg
+                className="absolute top-0 left-0 pointer-events-none overflow-visible"
+                style={{ width: totalWidth, height: totalH, zIndex: 15 }}
+              >
+                <defs>
+                  <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                    <path d="M0,0 L6,3 L0,6 Z" fill="rgba(255,255,255,0.7)" />
+                  </marker>
+                  <marker id="arrowhead-connect" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                    <path d="M0,0 L6,3 L0,6 Z" fill="rgba(96,165,250,0.9)" />
+                  </marker>
+                </defs>
+                {relations.map((r, i) => {
+                  const cy = (r.y1 + r.y2) / 2;
+                  return (
+                    <g key={i}>
+                      <path
+                        d={`M${r.x1},${r.y1} C${r.x1},${cy} ${r.x2},${cy} ${r.x2},${r.y2}`}
+                        stroke={r.color}
+                        strokeWidth="2"
+                        strokeOpacity="0.8"
+                        fill="none"
+                        vectorEffect="non-scaling-stroke"
+                        markerEnd="url(#arrowhead)"
+                      />
+                    </g>
+                  );
+                })}
+                {connectLine && (
+                  <path
+                    d={`M${connectLine.x1},${connectLine.y1} L${connectLine.x2},${connectLine.y2}`}
+                    stroke="rgba(96,165,250,0.9)"
+                    strokeWidth="2"
+                    strokeDasharray="6,4"
+                    fill="none"
+                    vectorEffect="non-scaling-stroke"
+                    markerEnd="url(#arrowhead-connect)"
+                  />
+                )}
+              </svg>
+            );
+          })()}
           </div>
         </div>
       </div>
+
+      {/* Connecting mode hint */}
+      {connectingFromId && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-blue-950/95 border border-blue-700 rounded-xl px-4 py-2 shadow-xl pointer-events-none">
+          <span className="text-xs text-blue-300 font-semibold">Click an X-ray order to link</span>
+          <span className="text-xs text-blue-500">ESC to cancel</span>
+        </div>
+      )}
 
       {/* Lasso overlay */}
       {lasso && (
@@ -626,16 +816,6 @@ export default function GanttBoard({
           style={{ left: lasso.x1, top: lasso.y1, width: lasso.x2 - lasso.x1, height: lasso.y2 - lasso.y1 }} />
       )}
 
-      {/* Debug zoom overlay */}
-      {debugInfo && (
-        <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-50 bg-black/80 border border-yellow-500/60 rounded-lg px-3 py-2 text-xs font-mono text-yellow-300 flex gap-4 pointer-events-none select-none">
-          <span>pph: <b>{debugInfo.pph.toFixed(2)}</b></span>
-          <span>tick: <b>{debugInfo.tick}</b></span>
-          <span>scrollLeft: <b>{debugInfo.scrollLeft.toFixed(0)}</b></span>
-          <span>effectiveSL: <b>{debugInfo.effectiveScrollLeft.toFixed(0)}</b></span>
-          <span>timeAtMouse: <b>{debugInfo.timeAtMouse.toFixed(2)}h</b></span>
-        </div>
-      )}
     </div>
   );
 }

@@ -17,16 +17,17 @@ model User {
 }
 
 model PlanningOrder {
-  id           String    @id @default(uuid())
-  partNumber   String
-  quantity     Int
-  color        String    @default("#3b82f6")
-  lineId       String?
-  startTime    DateTime?
-  closed       Boolean   @default(false)
-  comments     Json      @default("[]")
-  scrapPercent Float     @default(0)
-  createdAt    DateTime  @default(now())
+  id             String    @id @default(uuid())
+  partNumber     String
+  quantity       Int
+  color          String    @default("#3b82f6")
+  lineId         String?
+  startTime      DateTime?
+  closed         Boolean   @default(false)
+  comments       Json      @default("[]")
+  scrapPercent   Float     @default(0)
+  createdAt      DateTime  @default(now())
+  relatedOrderId String?
 }
 
 model LineConfig {

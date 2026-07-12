@@ -30,6 +30,7 @@ export interface PlanningOrder {
   comments: PlanningComment[];
   scrapPercent: number;
   createdAt: string;
+  relatedOrderId?: string | null;
 }
 
 export interface LineConfig {
