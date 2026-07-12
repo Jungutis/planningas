@@ -45,7 +45,7 @@ function serializeBlocker(b: {
 export async function getFullState() {
   const [dbOrders, dbLines, dbBlockers] = await Promise.all([
     prisma.planningOrder.findMany({ orderBy: { createdAt: 'asc' } }),
-    prisma.lineConfig.findMany(),
+    prisma.lineConfig.findMany({ orderBy: { id: 'asc' } }),
     prisma.blocker.findMany({ orderBy: { startTime: 'asc' } }),
   ]);
   return {
@@ -110,13 +110,38 @@ router.delete('/orders/:id', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/lines', async (req: Request, res: Response) => {
+  const { name, cycleTimeSeconds } = req.body as { name: string; cycleTimeSeconds: number };
+  if (!name || !cycleTimeSeconds) { res.status(400).json({ error: 'name and cycleTimeSeconds required' }); return; }
+  const id = name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || randomUUID().slice(0, 8);
+  const exists = await prisma.lineConfig.findUnique({ where: { id } });
+  const finalId = exists ? `${id}_${randomUUID().slice(0, 4)}` : id;
+  const created = await prisma.lineConfig.create({ data: { id: finalId, name, cycleTimeSeconds: Number(cycleTimeSeconds) } });
+  const lineConfig = created as unknown as LineConfig;
+  broadcastToAll({ type: 'line_config_created', lineConfig });
+  res.status(201).json(lineConfig);
+});
+
 router.patch('/lines/:id', async (req: Request, res: Response) => {
   const existing = await prisma.lineConfig.findUnique({ where: { id: req.params.id } });
   if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
   const updated = await prisma.lineConfig.update({ where: { id: req.params.id }, data: req.body });
-  const lineConfig = updated as LineConfig;
+  const lineConfig = updated as unknown as LineConfig;
   broadcastToAll({ type: 'line_config_updated', lineConfig });
   res.json(lineConfig);
+});
+
+router.delete('/lines/:id', async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const orderCount = await prisma.planningOrder.count({ where: { lineId: id } });
+  if (orderCount > 0) { res.status(409).json({ error: `Cannot delete: ${orderCount} order(s) still assigned to this work center` }); return; }
+  try {
+    await prisma.lineConfig.delete({ where: { id } });
+    broadcastToAll({ type: 'line_config_deleted', id });
+    res.status(204).end();
+  } catch {
+    res.status(404).json({ error: 'Not found' });
+  }
 });
 
 // ── Blockers ─────────────────────────────────────────────

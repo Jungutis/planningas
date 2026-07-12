@@ -1,69 +1,68 @@
 import { useState } from 'react';
-import { LineId, ORDER_COLORS } from '../../types';
+import { LineId, LineConfig, ORDER_COLORS } from '../../types';
 
-const LINES: { id: LineId; label: string }[] = [
-  { id: 'smt4', label: 'SMT4' },
-  { id: 'qlab', label: 'QLab' },
-  { id: 'xray', label: 'X-ray' },
-];
-
-const VALID_PNS: Record<LineId, string[]> = {
+const VALID_PNS: Record<string, string[]> = {
   smt4: ['260.260-01', '260.260-02'],
   qlab: ['260.260-01', '260.260-02'],
   xray: ['260.260-71', '260.260-72'],
 };
 
 interface Props {
+  lineConfigs: LineConfig[];
   onClose: () => void;
   onCreate: (partNumber: string, quantity: number, color: string, lineId: LineId) => void;
 }
 
-export default function CreateOrderModal({ onClose, onCreate }: Props) {
+export default function CreateOrderModal({ lineConfigs, onClose, onCreate }: Props) {
   const [partNumber, setPartNumber] = useState('');
   const [quantity, setQuantity] = useState('');
   const [color, setColor] = useState(ORDER_COLORS[0]);
-  const [lineId, setLineId] = useState<LineId>('smt4');
+  const [lineId, setLineId] = useState<LineId>(lineConfigs[0]?.id ?? 'smt4');
 
-  const validPns = VALID_PNS[lineId];
+  const validPns = VALID_PNS[lineId] ?? null;
+  const isBuiltIn = validPns !== null;
   const pnTouched = partNumber.length > 0;
   const pnFormatOk = /^\d{3}\.\d{3}-\d{2}$/.test(partNumber);
-  const pnValid = pnFormatOk && validPns.includes(partNumber);
-  const pnError = pnTouched && pnFormatOk && !validPns.includes(partNumber)
-    ? `Invalid PN for ${LINES.find(l => l.id === lineId)?.label}. Allowed: ${validPns.join(', ')}`
-    : pnTouched && !pnFormatOk
+  const pnValid = isBuiltIn
+    ? pnFormatOk && validPns!.includes(partNumber)
+    : partNumber.trim().length > 0;
+  const pnError = pnTouched && isBuiltIn && pnFormatOk && !validPns!.includes(partNumber)
+    ? `Invalid PN for ${lineConfigs.find(l => l.id === lineId)?.name}. Allowed: ${validPns!.join(', ')}`
+    : pnTouched && isBuiltIn && !pnFormatOk
     ? 'Format: 000.000-00'
     : null;
 
   const qty = Number(quantity);
   const qtyValid = quantity !== '' && qty >= 1 && qty <= 9999 && Number.isInteger(qty);
-  const qtyError = quantity !== '' && (!qtyValid)
-    ? 'Enter a whole number between 1 and 9999'
-    : null;
+  const qtyError = quantity !== '' && !qtyValid ? 'Enter a whole number between 1 and 9999' : null;
 
   const canSubmit = pnValid && qtyValid;
 
   const handlePartNumberChange = (raw: string) => {
-    const digits = raw.replace(/\D/g, '').slice(0, 8);
-    let formatted = digits;
-    if (digits.length > 3) formatted = digits.slice(0, 3) + '.' + digits.slice(3);
-    if (digits.length > 6) formatted = digits.slice(0, 3) + '.' + digits.slice(3, 6) + '-' + digits.slice(6);
-    setPartNumber(formatted);
+    if (isBuiltIn) {
+      const digits = raw.replace(/\D/g, '').slice(0, 8);
+      let formatted = digits;
+      if (digits.length > 3) formatted = digits.slice(0, 3) + '.' + digits.slice(3);
+      if (digits.length > 6) formatted = digits.slice(0, 3) + '.' + digits.slice(3, 6) + '-' + digits.slice(6);
+      setPartNumber(formatted);
+    } else {
+      setPartNumber(raw.slice(0, 30));
+    }
   };
 
   const handleQuantityChange = (raw: string) => {
-    const digitsOnly = raw.replace(/\D/g, '').slice(0, 4);
-    setQuantity(digitsOnly);
+    setQuantity(raw.replace(/\D/g, '').slice(0, 4));
   };
 
   const handleLineChange = (id: LineId) => {
     setLineId(id);
-    setPartNumber(''); // reset PN when line changes
+    setPartNumber('');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onCreate(partNumber, qty, color, lineId);
+    onCreate(partNumber.trim(), qty, color, lineId);
     onClose();
   };
 
@@ -73,12 +72,12 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
         <h2 className="text-lg font-semibold text-white mb-5">Create Order</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Line</label>
-            <div className="flex gap-2">
-              {LINES.map(l => (
+            <label className="block text-sm text-gray-400 mb-1">Work Center</label>
+            <div className="flex gap-2 flex-wrap">
+              {lineConfigs.map(l => (
                 <button key={l.id} type="button" onClick={() => handleLineChange(l.id)}
-                  className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${lineId === l.id ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white'}`}>
-                  {l.label}
+                  className={`px-3 py-2 rounded-lg border text-sm font-semibold transition-colors ${lineId === l.id ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white'}`}>
+                  {l.name}
                 </button>
               ))}
             </div>
@@ -88,18 +87,19 @@ export default function CreateOrderModal({ onClose, onCreate }: Props) {
             <label className="block text-sm text-gray-400 mb-1">Part Number</label>
             <input autoFocus type="text" value={partNumber}
               onChange={e => handlePartNumberChange(e.target.value)}
-              placeholder="000.000-00"
-              maxLength={10}
-              className={`w-full bg-gray-800 border rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none font-mono tracking-widest ${pnError ? 'border-red-500 focus:border-red-400' : pnValid ? 'border-green-600 focus:border-green-500' : 'border-gray-600 focus:border-blue-500'}`} />
-            {/* PN suggestions */}
-            <div className="flex gap-2 mt-1.5">
-              {validPns.map(pn => (
-                <button key={pn} type="button" onClick={() => setPartNumber(pn)}
-                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${partNumber === pn ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white hover:border-gray-400'}`}>
-                  {pn}
-                </button>
-              ))}
-            </div>
+              placeholder={isBuiltIn ? '000.000-00' : 'e.g. PART-001'}
+              maxLength={isBuiltIn ? 10 : 30}
+              className={`w-full bg-gray-800 border rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none ${isBuiltIn ? 'font-mono tracking-widest' : ''} ${pnError ? 'border-red-500 focus:border-red-400' : pnValid ? 'border-green-600 focus:border-green-500' : 'border-gray-600 focus:border-blue-500'}`} />
+            {isBuiltIn && (
+              <div className="flex gap-2 mt-1.5">
+                {validPns!.map(pn => (
+                  <button key={pn} type="button" onClick={() => setPartNumber(pn)}
+                    className={`text-xs px-2 py-0.5 rounded border transition-colors ${partNumber === pn ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white hover:border-gray-400'}`}>
+                    {pn}
+                  </button>
+                ))}
+              </div>
+            )}
             {pnError && <p className="text-xs text-red-400 mt-1">{pnError}</p>}
           </div>
 

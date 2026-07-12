@@ -75,7 +75,7 @@ export default function OrderModal({ order, userRole, lineConfig, isEditMode, or
   const relatedXrayOrder = isQlab && order.relatedOrderId
     ? orders.find(o => o.id === order.relatedOrderId)
     : null;
-  const canManageRelation = isQlab && (userRole === 'LOG' || userRole === 'Q');
+  const canManageRelation = isQlab && userRole === 'LOG' && isEditMode;
 
   const save = () => {
     onUpdate({ ...order, scrapPercent, color });

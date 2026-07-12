@@ -1,4 +1,4 @@
-export type LineId = 'smt4' | 'qlab' | 'xray';
+export type LineId = string;
 export type UserRole = 'Q' | 'LOG' | 'PROD';
 
 export interface PlanningComment {
@@ -44,5 +44,7 @@ export type WsMessage =
   | { type: 'order_upserted'; order: PlanningOrder }
   | { type: 'order_deleted'; id: string }
   | { type: 'line_config_updated'; lineConfig: LineConfig }
+  | { type: 'line_config_created'; lineConfig: LineConfig }
+  | { type: 'line_config_deleted'; id: string }
   | { type: 'blocker_upserted'; blocker: Blocker }
   | { type: 'blocker_deleted'; id: string };

@@ -22,11 +22,7 @@ interface Props {
   onDblClickLine?: (lineId: LineId) => void;
 }
 
-const LINES: { id: LineId; label: string }[] = [
-  { id: 'xray', label: 'X-ray' },
-  { id: 'qlab', label: 'QLab' },
-  { id: 'smt4', label: 'SMT4' },
-];
+
 
 const LABEL_W = 160;
 const ROW_H = 72;
@@ -111,6 +107,8 @@ export default function GanttBoard({
   onUpdateOrder, onOrderDoubleClick, onSelectionChange,
   onBlockerDraw, onBlockerEdit, onConnectToXray, onCancelConnect, onDblClickLine,
 }: Props) {
+  const LINES = lineConfigs.map(lc => ({ id: lc.id, label: lc.name }));
+
   const [pph, setPph] = useState(6);
   const [now, setNow] = useState(new Date());
   const [lasso, setLasso] = useState<LassoRect | null>(null);
@@ -699,7 +697,7 @@ export default function GanttBoard({
                           {order.closed && <span className="text-xs text-white/70 shrink-0">✓</span>}
                           {isSelected && <span className="text-xs text-white shrink-0">●</span>}
                           <span className="text-xs font-semibold truncate text-white">{order.partNumber}</span>
-                          {seg.width > 80 && <span className="text-xs text-white/70 shrink-0 ml-auto">{order.quantity}</span>}
+                          {seg.width > 80 && <span className="text-xs text-white/70 shrink-0 ml-auto">{order.quantity} pcs</span>}
                           {scrapRatio > 0 && seg.width > 100 && (
                             <span className="text-xs text-green-300/80 shrink-0" style={{ transform: 'scaleX(var(--zoom-inv,1))', transformOrigin: 'right center' }}>
                               {Math.round((1 - scrapRatio) * 100)}%✓
@@ -850,7 +848,7 @@ export default function GanttBoard({
             mon.setHours(0, 0, 0, 0);
             const monLeft = (mon.getTime() - timelineStartMs) / 3600000 * newPph;
             pphRef.current = newPph;
-            zoomTarget.current = { scrollLeft: monLeft, pph: newPph };
+            zoomTarget.current = { scrollLeft: Math.max(0, monLeft - 4 * newPph), pph: newPph };
             setPph(newPph);
           }}
           className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium shadow-lg transition-colors"

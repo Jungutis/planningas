@@ -6,6 +6,7 @@ import OrderModal from '../components/gantt/OrderModal';
 import CreateOrderModal from '../components/gantt/CreateOrderModal';
 import BlockerModal from '../components/gantt/BlockerModal';
 import ShiftModal, { getCurrentWeekStart } from '../components/gantt/ShiftModal';
+import WorkCenterModal from '../components/gantt/WorkCenterModal';
 
 const API = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
 
@@ -41,6 +42,7 @@ export default function Planning() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showWorkCenters, setShowWorkCenters] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Blocker create from draw
   const [pendingBlockerDraw, setPendingBlockerDraw] = useState<{ lineId: LineId; startTime: string; endTime: string } | null>(null);
@@ -138,6 +140,10 @@ export default function Planning() {
       setModalOrder(prev => prev?.id === msg.id ? null : prev);
     } else if (msg.type === 'line_config_updated') {
       setLineConfigs(prev => prev.map(l => l.id === msg.lineConfig.id ? msg.lineConfig : l));
+    } else if (msg.type === 'line_config_created') {
+      setLineConfigs(prev => [...prev, msg.lineConfig]);
+    } else if (msg.type === 'line_config_deleted') {
+      setLineConfigs(prev => prev.filter(l => l.id !== msg.id));
     } else if (msg.type === 'blocker_upserted') {
       setBlockers(prev => { const idx = prev.findIndex(b => b.id === msg.blocker.id); if (idx >= 0) { const n = [...prev]; n[idx] = msg.blocker; return n; } return [...prev, msg.blocker]; });
     } else if (msg.type === 'blocker_deleted') {
@@ -194,6 +200,23 @@ export default function Planning() {
 
   const handleCreateOrder = useCallback(async (partNumber: string, quantity: number, color: string, lineId: LineId) => {
     await apiPost('/orders', { partNumber, quantity, color, lineId });
+  }, []);
+
+  const handleCreateWorkCenter = useCallback(async (name: string, cycleTimeSeconds: number) => {
+    await apiPost('/lines', { name, cycleTimeSeconds });
+  }, []);
+
+  const handleDeleteWorkCenter = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API}/planning/lines/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json() as { error?: string };
+        return body.error ?? 'Failed to delete';
+      }
+      return null;
+    } catch {
+      return 'Network error';
+    }
   }, []);
 
   // Called from board after drawing — opens modal with pre-filled times
@@ -463,7 +486,13 @@ export default function Planning() {
                 </button>
               </>
             )}
-            {!sidebarOpen && (
+            {isEditMode && (
+              <button onClick={() => setShowWorkCenters(true)} title="Manage Work Centers"
+                className="ml-auto flex items-center gap-1.5 px-2 md:px-3 py-1 rounded-md text-xs md:text-sm font-medium text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors">
+                <span>⚙</span><span className="hidden sm:inline">Work Centers</span>
+              </button>
+            )}
+            {!sidebarOpen && !isEditMode && (
               <button onClick={() => setSidebarOpen(true)} className="ml-auto text-xs text-gray-500 hover:text-gray-300 md:hidden">Show sidebar</button>
             )}
           </div>
@@ -498,7 +527,16 @@ export default function Planning() {
         </div>
       </div>
 
-      {showCreate && <CreateOrderModal onClose={() => setShowCreate(false)} onCreate={handleCreateOrder} />}
+      {showCreate && <CreateOrderModal lineConfigs={lineConfigs} onClose={() => setShowCreate(false)} onCreate={handleCreateOrder} />}
+
+      {showWorkCenters && (
+        <WorkCenterModal
+          lineConfigs={lineConfigs}
+          onClose={() => setShowWorkCenters(false)}
+          onCreate={handleCreateWorkCenter}
+          onDelete={handleDeleteWorkCenter}
+        />
+      )}
 
       {shiftModalLine && (() => {
         const weekStart = getCurrentWeekStart();
