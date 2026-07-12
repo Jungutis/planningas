@@ -625,7 +625,7 @@ export default function GanttBoard({
                         onMouseDown={e => { if (isEditMode) e.stopPropagation(); }}
                         className={`absolute top-0 bottom-0 flex items-center justify-center overflow-hidden ${isEditMode ? 'cursor-pointer' : ''}`}
                         style={{ left: bLeft, width: Math.max(bWidth, 4), backgroundColor: b.color + '33', borderLeft: `2px solid ${b.color}`, borderRight: `2px solid ${b.color}`, zIndex: isEditMode ? 20 : 10 }}>
-                        <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color }}>{b.label}</span>
+                        <span className="text-xs font-semibold whitespace-nowrap px-1 truncate" style={{ color: b.color, transform: 'scaleX(var(--zoom-inv, 1))', transformOrigin: 'left center', display: 'inline-block' }}>{b.label}</span>
                       </div>
                     );
                   })}
