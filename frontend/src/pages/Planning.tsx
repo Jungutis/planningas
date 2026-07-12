@@ -5,6 +5,7 @@ import GanttBoard, { BoardMode } from '../components/gantt/GanttBoard';
 import OrderModal from '../components/gantt/OrderModal';
 import CreateOrderModal from '../components/gantt/CreateOrderModal';
 import BlockerModal from '../components/gantt/BlockerModal';
+import ShiftModal, { getCurrentWeekStart } from '../components/gantt/ShiftModal';
 
 const API = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
 
@@ -47,6 +48,8 @@ export default function Planning() {
   const [editingBlocker, setEditingBlocker] = useState<Blocker | null>(null);
   // QLab→X-ray relation connecting mode
   const [connectingFromId, setConnectingFromId] = useState<string | null>(null);
+  // Shift model modal
+  const [shiftModalLine, setShiftModalLine] = useState<LineId | null>(null);
 
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
@@ -222,6 +225,30 @@ export default function Planning() {
     setBlockers(prev => prev.filter(b => b.id !== id));
     void apiDelete(`/blockers/${id}`);
   }, []);
+
+  const handleShiftApply = useCallback(async (lineId: LineId, shifts: number) => {
+    const weekStart = getCurrentWeekStart();
+    const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 3600000);
+    // Delete existing [SHIFT] blockers for this line overlapping current week
+    const toDelete = blockers.filter(b =>
+      b.lineId === lineId &&
+      b.label.startsWith('[SHIFT]') &&
+      new Date(b.endTime) > weekStart &&
+      new Date(b.startTime) < weekEnd
+    );
+    await Promise.all(toDelete.map(b => apiDelete(`/blockers/${b.id}`)));
+    // Create blocker from line-stop to week-end (if not full week)
+    if (shifts < 21) {
+      const lineStop = new Date(weekStart.getTime() + shifts * 8 * 3600000);
+      await apiPost('/blockers', {
+        lineId,
+        startTime: lineStop.toISOString(),
+        endTime: weekEnd.toISOString(),
+        label: `[SHIFT] ${shifts} shifts`,
+        color: '#4b5563',
+      });
+    }
+  }, [blockers]);
 
   const handleStartConnect = useCallback((qlabOrderId: string) => {
     setModalOrder(null);
@@ -465,12 +492,35 @@ export default function Planning() {
               onBlockerEdit={handleBlockerEdit}
               onConnectToXray={handleConnectToXray}
               onCancelConnect={handleCancelConnect}
+              onDblClickLine={userRole === 'LOG' ? setShiftModalLine : undefined}
             />
           </div>
         </div>
       </div>
 
       {showCreate && <CreateOrderModal onClose={() => setShowCreate(false)} onCreate={handleCreateOrder} />}
+
+      {shiftModalLine && (() => {
+        const weekStart = getCurrentWeekStart();
+        const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 3600000);
+        const existing = blockers.find(b =>
+          b.lineId === shiftModalLine &&
+          b.label.startsWith('[SHIFT]') &&
+          new Date(b.endTime) > weekStart &&
+          new Date(b.startTime) < weekEnd
+        );
+        const initialShifts = existing
+          ? Math.round((new Date(existing.startTime).getTime() - weekStart.getTime()) / (8 * 3600000))
+          : 21;
+        return (
+          <ShiftModal
+            lineId={shiftModalLine}
+            initialShifts={initialShifts}
+            onApply={handleShiftApply}
+            onClose={() => setShiftModalLine(null)}
+          />
+        );
+      })()}
 
       {/* Blocker create modal (after drawing) */}
       {pendingBlockerDraw && (

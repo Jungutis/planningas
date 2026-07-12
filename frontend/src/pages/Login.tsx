@@ -20,8 +20,8 @@ export default function Login() {
         : await authApi.register(email, password);
       login(res.token, res.user);
     } catch (err) {
-      if (axios.isAxiosError(err)) setError(err.response?.data?.error || 'Įvyko klaida');
-      else setError('Netikėta klaida');
+      if (axios.isAxiosError(err)) setError(err.response?.data?.error || 'An error occurred');
+      else setError('Unexpected error');
     } finally {
       setLoading(false);
     }
@@ -36,23 +36,23 @@ export default function Login() {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">Planningas</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {mode === 'login' ? 'Prisijunk prie savo paskyros' : 'Sukurk naują paskyrą'}
+            {mode === 'login' ? 'Sign in to your account' : 'Create a new account'}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">El. paštas</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">Email</label>
             <input
               type="email" required value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition text-sm"
-              placeholder="tavo@pastas.lt"
+              placeholder="your@email.com"
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1.5">
-              Slaptažodis {mode === 'register' && <span className="text-slate-400">(min. 8 simboliai)</span>}
+              Password {mode === 'register' && <span className="text-slate-400">(min. 8 characters)</span>}
             </label>
             <input
               type="password" required minLength={mode === 'register' ? 8 : undefined} value={password}
@@ -72,17 +72,17 @@ export default function Login() {
             type="submit" disabled={loading}
             className="w-full h-11 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition"
           >
-            {loading ? 'Palauk…' : mode === 'login' ? 'Prisijungti' : 'Registruotis'}
+            {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Register'}
           </button>
         </form>
 
         <p className="text-center text-sm text-slate-500 mt-5">
-          {mode === 'login' ? 'Neturi paskyros?' : 'Jau turi paskyrą?'}{' '}
+          {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
           <button
             onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
             className="text-indigo-600 font-medium hover:underline"
           >
-            {mode === 'login' ? 'Registruokis' : 'Prisijunk'}
+            {mode === 'login' ? 'Register' : 'Sign in'}
           </button>
         </p>
       </div>

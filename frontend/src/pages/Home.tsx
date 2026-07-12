@@ -20,7 +20,7 @@ export default function Home() {
               onClick={logout}
               className="text-sm text-slate-500 hover:text-red-600 font-medium transition"
             >
-              Atsijungti
+              Sign out
             </button>
           </div>
         </div>
@@ -30,10 +30,10 @@ export default function Home() {
       <main className="max-w-5xl mx-auto px-6 py-12">
         <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center shadow-sm">
           <div className="text-4xl mb-4">🗓️</div>
-          <h1 className="text-xl font-semibold mb-2">Sveikas atvykęs į Planningą!</h1>
+          <h1 className="text-xl font-semibold mb-2">Welcome to Planningas!</h1>
           <p className="text-slate-500 text-sm max-w-md mx-auto">
-            Projektas paruoštas — backend su autentifikacija veikia, frontend'as pasiruošęs.
-            Laikas nuspręsti, ką planuosime. 🚀
+            Project is ready — backend with authentication is running, frontend is set up.
+            Time to decide what to plan. 🚀
           </p>
         </div>
       </main>
