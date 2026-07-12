@@ -843,10 +843,14 @@ export default function GanttBoard({
           onClick={() => {
             const el = scrollRef.current;
             if (!el) return;
-            const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(22, 0, 0, 0);
-            if (Date.now() < ws.getTime()) ws.setDate(ws.getDate() - 7);
-            const wl = (ws.getTime() - timelineStartMs) / 3600000 * pphRef.current;
-            el.scrollLeft = Math.max(0, wl - el.clientWidth / 4);
+            const newPph = DEFAULT_PPH * 1.25;
+            const mon = new Date();
+            mon.setDate(mon.getDate() - (mon.getDay() === 0 ? 6 : mon.getDay() - 1));
+            mon.setHours(0, 0, 0, 0);
+            const monLeft = (mon.getTime() - timelineStartMs) / 3600000 * newPph;
+            pphRef.current = newPph;
+            zoomTarget.current = { scrollLeft: monLeft, pph: newPph };
+            setPph(newPph);
           }}
           className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium shadow-lg transition-colors"
         >
